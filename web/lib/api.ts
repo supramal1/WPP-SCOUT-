@@ -87,10 +87,12 @@ export async function rescore(
   // Use direct API URL to bypass the Next.js rewrite proxy which can
   // timeout on large payloads.
   if (res.status === 404 && _cachedSheets) {
+    const json = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
+    const compressed = await gzipString(json);
     const retryRes = await fetch(`${DIRECT_API_BASE}/rescore`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets }),
+      headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+      body: compressed,
     });
 
     if (retryRes.ok) return retryRes.json();

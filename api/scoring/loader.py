@@ -912,15 +912,19 @@ def _load_sheet_from_rows(
     import tempfile
     from pathlib import Path
 
+    # Find the max row width (header row) so all rows are padded to the same length.
+    # Client-side trimming may produce ragged rows which breaks pd.read_excel.
+    max_cols = max(len(r) for r in rows) if rows else 0
+
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         import openpyxl
 
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         ws = wb.create_sheet(sheet_name)
-        # Write the metadata rows + header + data exactly as the original format
         for row in rows:
-            ws.append([c if c is not None else "" for c in row])
+            padded = list(row) + [None] * (max_cols - len(row))
+            ws.append([c if c is not None else "" for c in padded])
         wb.save(tmp.name)
         tmp_path = tmp.name
 

@@ -50,7 +50,7 @@ export function FilterBar({
             </label>
             <Select
               value={activeFilters[def.key] || "All"}
-              onValueChange={(v) => onFilterChange(def.key, v)}
+              onValueChange={(v) => onFilterChange(def.key, v ?? "All")}
             >
               <SelectTrigger className="w-[140px] bg-zinc-900 border-zinc-700 text-sm">
                 <SelectValue />
@@ -88,7 +88,7 @@ export function FilterBar({
           <span className="text-xs text-zinc-500">Group by:</span>
           <Select
             value={groupBy}
-            onValueChange={(v) => onGroupByChange(v as GroupBy)}
+            onValueChange={(v) => { if (v) onGroupByChange(v as GroupBy); }}
           >
             <SelectTrigger className="w-[160px] bg-zinc-900 border-zinc-700 text-sm">
               <SelectValue />

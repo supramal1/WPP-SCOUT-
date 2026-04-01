@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from cache import UploadCache
-from scoring.loader import load_data
+from scoring.loader import load_data, load_data_from_sheets
 from scoring.scorer import score_raw_variants, assign_action
 from scoring.explainer import generate_explanations
 
@@ -122,6 +122,27 @@ def _apply_filters(df: pd.DataFrame, filters: dict[str, str]) -> pd.DataFrame:
 def process_upload(filepath: str) -> dict:
     """Full upload pipeline: load -> score -> cache -> serialize."""
     df_raw, _ = load_data(filepath)
+    upload_id = upload_cache.store(df_raw)
+    scored = _score_and_enrich(df_raw)
+    creatives = _df_to_creatives(scored)
+    filters = _extract_filters(df_raw)
+    platforms_found = sorted(df_raw["platform"].dropna().unique().tolist())
+
+    return {
+        "upload_id": upload_id,
+        "creatives": creatives,
+        "filters": filters,
+        "meta": {
+            "total_rows": len(scored),
+            "platforms_found": platforms_found,
+            "brand": "",
+        },
+    }
+
+
+def process_upload_json(sheets: dict[str, list[list]]) -> dict:
+    """Upload pipeline from pre-parsed JSON sheet data (no file needed)."""
+    df_raw, _ = load_data_from_sheets(sheets)
     upload_id = upload_cache.store(df_raw)
     scored = _score_and_enrich(df_raw)
     creatives = _df_to_creatives(scored)

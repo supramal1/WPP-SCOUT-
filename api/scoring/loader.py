@@ -870,3 +870,128 @@ def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["cross_platform"] = df["platforms_active"].str.contains(",", na=False)
 
     return df_raw, df
+
+
+def _load_sheet_from_rows(
+    rows: list[list], sheet_name: str, platform_default: str, buying_type: str
+) -> pd.DataFrame:
+    """Load a sheet from pre-parsed JSON rows (same as _load_sheet but without ExcelFile).
+
+    Expects rows as array-of-arrays where row 0-1 are metadata (Report/Date range)
+    and row 2 is headers — matching the Pixel DE format that _load_sheet reads with header=2.
+    """
+    if len(rows) < 4:
+        return pd.DataFrame()
+
+    # Row index 2 = headers (same as header=2 in pd.read_excel)
+    headers = [
+        str(c).strip().replace("\n", " ") if c is not None else "" for c in rows[2]
+    ]
+    data_rows = rows[3:]
+
+    df = pd.DataFrame(data_rows, columns=headers)
+    # Convert numeric-looking strings back to numbers
+    df = df.apply(pd.to_numeric, errors="ignore")
+
+    # Delegate to _load_sheet by creating a temporary ExcelFile
+    # Instead, replicate the column processing inline using the existing normalizers
+    # Drop completely empty rows
+    if "Creative Name" not in df.columns:
+        return pd.DataFrame()
+
+    df = df.dropna(subset=["Creative Name"], how="all")
+    df = df[
+        df["Creative Name"].notna()
+        & (df["Creative Name"].astype(str).str.strip() != "")
+    ]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # Write to a temp Excel so we can reuse _load_sheet exactly
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        import openpyxl
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(sheet_name)
+        # Write the metadata rows + header + data exactly as the original format
+        for row in rows:
+            ws.append([c if c is not None else "" for c in row])
+        wb.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        xl = pd.ExcelFile(tmp_path)
+        return _load_sheet(xl, sheet_name, platform_default, buying_type)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def load_data_from_sheets(
+    sheets: dict[str, list[list]],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Same as load_data() but from pre-parsed JSON sheet data instead of a file."""
+    sheet_configs = [
+        ("Data Analysis Paid Meta", "Meta", "Paid"),
+        ("Data Analysis Paid TikTok", "TikTok", "Paid"),
+        ("Data Analysis Boosting Meta", "Meta", "Boosting"),
+        ("Data Analysis Boosting TikTok", "TikTok", "Boosting"),
+    ]
+
+    frames = []
+    for sheet_name, platform_default, buying_type in sheet_configs:
+        if sheet_name in sheets:
+            result = _load_sheet_from_rows(
+                sheets[sheet_name], sheet_name, platform_default, buying_type
+            )
+            if not result.empty:
+                frames.append(result)
+
+    if not frames:
+        raise ValueError(
+            f"No matching sheets found. Expected: {[c[0] for c in sheet_configs]}"
+        )
+
+    df_raw = pd.concat(frames, ignore_index=True)
+
+    # Same post-processing as load_data
+    imp_raw = df_raw["impressions"].replace(0, float("nan"))
+    df_raw["completion_rate"] = (df_raw["video_views_100"] / imp_raw) * 100
+    df_raw["ctr"] = (df_raw["clicks"] / imp_raw) * 100
+    df_raw["engagement_rate"] = (df_raw["engagements"] / imp_raw) * 100
+
+    df_raw = compute_canonical_metrics(df_raw)
+    df_raw = compute_attention_proxy_inputs(df_raw)
+
+    df = aggregate_creatives(df_raw)
+
+    imp = df["impressions"].replace(0, float("nan"))
+    df["completion_rate"] = (df["video_views_100"] / imp) * 100
+    df["ctr"] = (df["clicks"] / imp) * 100
+    df["engagement_rate"] = (df["engagements"] / imp) * 100
+    df["share_rate"] = (df["shares"] / imp) * 100
+    df["cost_per_complete_view"] = df["spend"] / df["video_views_100"].replace(
+        0, float("nan")
+    )
+    df["reach_per_pound"] = df["reach"] / df["spend"].replace(0, float("nan"))
+    df["cpm"] = (df["spend"] / imp) * 1000
+
+    df = compute_canonical_metrics(df)
+    df = compute_duration_adjusted_completion(df)
+    df = compute_audience_consistency(df_raw, df)
+
+    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+
+    name_to_platforms = (
+        df_raw.groupby("creative_name")["platform"]
+        .apply(lambda x: ", ".join(sorted(x.unique())))
+        .to_dict()
+    )
+    df["platforms_active"] = df["creative_name"].map(name_to_platforms)
+    df["cross_platform"] = df["platforms_active"].str.contains(",", na=False)
+
+    return df_raw, df

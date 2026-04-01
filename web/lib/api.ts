@@ -1,5 +1,5 @@
 import type { UploadResponse, RescoreResponse, ApiError, ActiveFilters } from "./types";
-import { stripExcel } from "./excel-strip";
+import { parseExcel } from "./excel-strip";
 
 const API_BASE = "/api";
 
@@ -7,18 +7,19 @@ export async function uploadAndScore(
   file: File,
   onProgress?: (msg: string) => void
 ): Promise<UploadResponse> {
-  onProgress?.("Preparing file...");
-  const stripped = await stripExcel(file);
-  const sizeMB = (stripped.size / (1024 * 1024)).toFixed(1);
+  onProgress?.("Parsing Excel file...");
+  const sheets = await parseExcel(file);
+  const sheetNames = Object.keys(sheets);
+  onProgress?.(`Scoring ${sheetNames.length} sheet(s)...`);
+
+  const body = JSON.stringify({ sheets });
+  const sizeMB = (body.length / (1024 * 1024)).toFixed(1);
   onProgress?.(`Uploading ${sizeMB}MB and scoring...`);
 
   const res = await fetch(`${API_BASE}/upload-and-score`, {
     method: "POST",
-    body: (() => {
-      const fd = new FormData();
-      fd.append("file", stripped);
-      return fd;
-    })(),
+    headers: { "Content-Type": "application/json" },
+    body,
   });
 
   if (!res.ok) {

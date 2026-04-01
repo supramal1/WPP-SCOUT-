@@ -9,19 +9,12 @@ def client():
 
 
 @pytest.fixture
-def uploaded_data(client, sample_excel_path):
-    """Upload a file and return the response data."""
-    with open(sample_excel_path, "rb") as f:
-        response = client.post(
-            "/api/upload-and-score",
-            files={
-                "file": (
-                    "test.xlsx",
-                    f,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-            },
-        )
+def uploaded_data(client, sample_sheets_json):
+    """Upload JSON sheet data and return the response data."""
+    response = client.post(
+        "/api/upload-and-score",
+        json={"sheets": sample_sheets_json},
+    )
     return response.json()
 
 

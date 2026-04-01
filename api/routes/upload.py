@@ -1,32 +1,29 @@
 import tempfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from scoring.pipeline import process_upload
+from pydantic import BaseModel
+from scoring.pipeline import process_upload, process_upload_json
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 
 
+class SheetsUpload(BaseModel):
+    sheets: dict[str, list[list]]
+
+
 @router.post("/upload-and-score")
-async def upload_and_score(file: UploadFile = File(...)):
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
+async def upload_and_score(payload: SheetsUpload):
+    """Accept pre-parsed sheet data as JSON (parsed client-side with SheetJS)."""
+    if not payload.sheets:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "invalid_file",
-                "message": "Please upload an Excel file (.xlsx)",
-            },
+            detail={"error": "no_sheets", "message": "No sheet data provided"},
         )
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-
     try:
-        result = process_upload(tmp_path)
+        result = process_upload_json(payload.sheets)
         return result
     except KeyError as e:
         raise HTTPException(
@@ -47,5 +44,3 @@ async def upload_and_score(file: UploadFile = File(...)):
             status_code=400,
             detail={"error": "empty_data", "message": error_msg},
         )
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)

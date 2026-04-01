@@ -8,18 +8,11 @@ def client():
     return TestClient(app)
 
 
-def test_upload_valid_excel(client, sample_excel_path):
-    with open(sample_excel_path, "rb") as f:
-        response = client.post(
-            "/api/upload-and-score",
-            files={
-                "file": (
-                    "test.xlsx",
-                    f,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-            },
-        )
+def test_upload_valid_json(client, sample_sheets_json):
+    response = client.post(
+        "/api/upload-and-score",
+        json={"sheets": sample_sheets_json},
+    )
     assert response.status_code == 200
     data = response.json()
     assert "upload_id" in data
@@ -28,34 +21,19 @@ def test_upload_valid_excel(client, sample_excel_path):
     assert "meta" in data
 
 
-def test_upload_invalid_file_type(client, tmp_path):
-    fake_file = tmp_path / "test.csv"
-    fake_file.write_text("a,b,c\n1,2,3")
-    with open(fake_file, "rb") as f:
-        response = client.post(
-            "/api/upload-and-score",
-            files={"file": ("test.csv", f, "text/csv")},
-        )
+def test_upload_empty_sheets(client):
+    response = client.post(
+        "/api/upload-and-score",
+        json={"sheets": {}},
+    )
     assert response.status_code == 400
-    assert response.json()["detail"]["error"] == "invalid_file"
+    assert response.json()["detail"]["error"] == "no_sheets"
 
 
-def test_upload_empty_excel(client, tmp_path):
-    import openpyxl
-
-    wb = openpyxl.Workbook()
-    path = tmp_path / "empty.xlsx"
-    wb.save(str(path))
-    with open(path, "rb") as f:
-        response = client.post(
-            "/api/upload-and-score",
-            files={
-                "file": (
-                    "empty.xlsx",
-                    f,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-            },
-        )
+def test_upload_no_matching_sheets(client):
+    response = client.post(
+        "/api/upload-and-score",
+        json={"sheets": {"Random Sheet": [["a", "b"], [1, 2]]}},
+    )
     assert response.status_code == 400
-    assert response.json()["detail"]["error"] in ("no_sheets", "empty_data")
+    assert response.json()["detail"]["error"] == "no_sheets"

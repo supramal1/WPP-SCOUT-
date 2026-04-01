@@ -7,36 +7,34 @@ const RELEVANT_SHEETS = [
   "Data Analysis Boosting TikTok",
 ];
 
+export interface ParsedSheets {
+  [sheetName: string]: (string | number | null)[][];
+}
+
 /**
- * Strips an Excel file to only the 4 "Data Analysis" sheets the backend needs,
- * with raw data only (no formatting, charts, images).
- * Reduces a 7.6MB file to ~50-200KB, well under Vercel's 4.5MB body limit.
+ * Parses an Excel file in the browser and extracts only the relevant
+ * "Data Analysis" sheets as raw arrays. Returns JSON-serializable data
+ * instead of a File, avoiding the 4.5MB Vercel body limit.
  */
-export async function stripExcel(file: File): Promise<File> {
+export async function parseExcel(file: File): Promise<ParsedSheets> {
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: "array" });
 
-  const newWb = XLSX.utils.book_new();
-  let sheetsFound = 0;
-
+  const sheets: ParsedSheets = {};
   for (const name of wb.SheetNames) {
     if (!RELEVANT_SHEETS.includes(name)) continue;
     const sheet = wb.Sheets[name];
-    const data = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
-    const newSheet = XLSX.utils.aoa_to_sheet(data as unknown[][]);
-    XLSX.utils.book_append_sheet(newWb, newSheet, name);
-    sheetsFound++;
+    sheets[name] = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+      header: 1,
+      defval: null,
+    });
   }
 
-  if (sheetsFound === 0) {
+  if (Object.keys(sheets).length === 0) {
     throw new Error(
       `No matching sheets found. Expected: ${RELEVANT_SHEETS.join(", ")}`
     );
   }
 
-  const out = XLSX.write(newWb, { type: "array", bookType: "xlsx" });
-  const blob = new Blob([out], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  return new File([blob], file.name, { type: blob.type });
+  return sheets;
 }

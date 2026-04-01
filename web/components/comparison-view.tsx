@@ -20,7 +20,7 @@ import {
 import { TierBadge } from "./tier-badge";
 import { rescore } from "@/lib/api";
 import { aggregateByConcept } from "@/lib/filters";
-import type { FilterOptions, GroupBy } from "@/lib/types";
+import type { FilterOptions, GroupBy, RescoreResponse } from "@/lib/types";
 
 interface ComparisonViewProps {
   uploadId: string;
@@ -68,9 +68,13 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
     setIsLoading(true);
     setError(null);
     try {
-      const results = await Promise.all(
-        options.map((val) => rescore(uploadId, { [dimension]: val }))
-      );
+      // Serialize requests: first call may need to send sheets to warm the
+      // server cache (cold serverless instance). Once warmed, subsequent
+      // calls hit the same instance's cache and are fast.
+      const results: RescoreResponse[] = [];
+      for (const val of options) {
+        results.push(await rescore(uploadId, { [dimension]: val }));
+      }
 
       // Build a map per dimension value: name -> { score, tier }
       const valueMaps = options.map((val, i) => {

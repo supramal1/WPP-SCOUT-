@@ -3,14 +3,22 @@ import { stripExcel } from "./excel-strip";
 
 const API_BASE = "/api";
 
-export async function uploadAndScore(file: File): Promise<UploadResponse> {
+export async function uploadAndScore(
+  file: File,
+  onProgress?: (msg: string) => void
+): Promise<UploadResponse> {
+  onProgress?.("Preparing file...");
   const stripped = await stripExcel(file);
-  const formData = new FormData();
-  formData.append("file", stripped);
+  const sizeMB = (stripped.size / (1024 * 1024)).toFixed(1);
+  onProgress?.(`Uploading ${sizeMB}MB and scoring...`);
 
   const res = await fetch(`${API_BASE}/upload-and-score`, {
     method: "POST",
-    body: formData,
+    body: (() => {
+      const fd = new FormData();
+      fd.append("file", stripped);
+      return fd;
+    })(),
   });
 
   if (!res.ok) {

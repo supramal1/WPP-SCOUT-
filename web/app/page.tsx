@@ -32,10 +32,10 @@ export default function Dashboard() {
 
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
-    setLoadingMessage("Uploading and scoring...");
+    setLoadingMessage("Reading file...");
     setError(null);
     try {
-      const result = await uploadAndScore(file);
+      const result = await uploadAndScore(file, setLoadingMessage);
       setUploadId(result.upload_id);
       setAllCreatives(result.creatives);
       setFilters(result.filters);

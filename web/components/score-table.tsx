@@ -91,7 +91,7 @@ export function ScoreTable({ creatives, isLoading }: ScoreTableProps) {
                 <TableCell className="font-mono text-sm">{c.completion_rate?.toFixed(1)}%</TableCell>
                 <TableCell className="font-mono text-sm">{c.ctr?.toFixed(3)}%</TableCell>
                 <TableCell className="font-mono text-sm">
-                  {"\u20AC"}{c.spend?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  {"\u00A3"}{c.spend?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </TableCell>
                 <TableCell>
                   <span className={`text-xs px-2 py-1 rounded ${

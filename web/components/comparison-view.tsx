@@ -19,11 +19,13 @@ import {
 } from "@/components/ui/table";
 import { TierBadge } from "./tier-badge";
 import { rescore } from "@/lib/api";
-import type { FilterOptions } from "@/lib/types";
+import { aggregateByConcept } from "@/lib/filters";
+import type { FilterOptions, GroupBy } from "@/lib/types";
 
 interface ComparisonViewProps {
   uploadId: string;
   filters: FilterOptions;
+  groupBy: GroupBy;
 }
 
 const DIMENSION_OPTIONS: { key: string; label: string; optionsKey: keyof FilterOptions }[] = [
@@ -38,12 +40,12 @@ const DIMENSION_OPTIONS: { key: string; label: string; optionsKey: keyof FilterO
 ];
 
 interface ComparisonRow {
-  creative_name: string;
+  name: string;
   scores: Record<string, { score: number; tier: string } | null>;
   spread: number | null;
 }
 
-export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
+export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewProps) {
   const [dimension, setDimension] = useState("asset_subtype");
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [comparedValues, setComparedValues] = useState<string[]>([]);
@@ -68,18 +70,28 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
         options.map((val) => rescore(uploadId, { [dimension]: val }))
       );
 
-      // Build a map per value: creative_name -> { score, tier }
-      const valueMaps = options.map((val, i) => ({
-        val,
-        map: new Map(
-          results[i].creatives.map((c) => [
-            c.creative_name,
-            { score: c.composite_score, tier: c.tier },
-          ])
-        ),
-      }));
+      // Build a map per dimension value: name -> { score, tier }
+      const valueMaps = options.map((val, i) => {
+        if (groupBy === "concept") {
+          const concepts = aggregateByConcept(results[i].creatives);
+          return {
+            val,
+            map: new Map(
+              concepts.map((g) => [g.concept, { score: g.composite_score, tier: g.tier }])
+            ),
+          };
+        }
+        return {
+          val,
+          map: new Map(
+            results[i].creatives.map((c) => [
+              c.creative_name,
+              { score: c.composite_score, tier: c.tier },
+            ])
+          ),
+        };
+      });
 
-      // Collect all creative names
       const allNames = new Set<string>();
       for (const { map } of valueMaps) {
         for (const name of map.keys()) allNames.add(name);
@@ -98,7 +110,7 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
             validScores.length >= 2
               ? Math.round((Math.max(...validScores) - Math.min(...validScores)) * 10) / 10
               : null;
-          return { creative_name: name, scores, spread };
+          return { name, scores, spread };
         })
         .sort((a, b) => Math.abs(b.spread ?? 0) - Math.abs(a.spread ?? 0));
 
@@ -109,7 +121,7 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [uploadId, dimension, options]);
+  }, [uploadId, dimension, options, groupBy]);
 
   return (
     <div className="space-y-4">
@@ -146,7 +158,9 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
         <Table>
           <TableHeader>
             <TableRow className="border-zinc-800 hover:bg-transparent">
-              <TableHead className="text-zinc-500">Creative</TableHead>
+              <TableHead className="text-zinc-500">
+                {groupBy === "concept" ? "Concept" : "Creative"}
+              </TableHead>
               {comparedValues.map((val) => (
                 <TableHead key={val} className="text-zinc-500">{val}</TableHead>
               ))}
@@ -155,8 +169,8 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
           </TableHeader>
           <TableBody>
             {rows.map((r) => (
-              <TableRow key={r.creative_name} className="border-zinc-800">
-                <TableCell className="font-medium">{r.creative_name}</TableCell>
+              <TableRow key={r.name} className="border-zinc-800">
+                <TableCell className="font-medium">{r.name}</TableCell>
                 {comparedValues.map((val) => {
                   const entry = r.scores[val];
                   return (

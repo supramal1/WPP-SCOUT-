@@ -1,11 +1,14 @@
 "use client";
 
 import { ScoreTable } from "./score-table";
-import type { Creative } from "@/lib/types";
+import { ConceptView } from "./concept-view";
+import { aggregateByConcept } from "@/lib/filters";
+import type { Creative, GroupBy } from "@/lib/types";
 
 interface PlatformViewProps {
   creatives: Creative[];
   isLoading?: boolean;
+  groupBy: GroupBy;
 }
 
 const PLATFORM_SECTIONS: { label: string; platform: string; buying_type: string }[] = [
@@ -15,7 +18,7 @@ const PLATFORM_SECTIONS: { label: string; platform: string; buying_type: string 
   { label: "Meta Boosting", platform: "Meta", buying_type: "Boosting" },
 ];
 
-export function PlatformView({ creatives, isLoading }: PlatformViewProps) {
+export function PlatformView({ creatives, isLoading, groupBy }: PlatformViewProps) {
   const sections = PLATFORM_SECTIONS.map((s) => ({
     ...s,
     data: creatives.filter(
@@ -40,10 +43,16 @@ export function PlatformView({ creatives, isLoading }: PlatformViewProps) {
           <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-3 border-b border-zinc-800 pb-2">
             {s.label}
             <span className="ml-2 font-mono font-normal text-zinc-600">
-              ({s.data.length})
+              ({groupBy === "concept"
+                ? `${aggregateByConcept(s.data).length} concepts`
+                : `${s.data.length} creatives`})
             </span>
           </h2>
-          <ScoreTable creatives={s.data} isLoading={isLoading} />
+          {groupBy === "concept" ? (
+            <ConceptView concepts={aggregateByConcept(s.data)} isLoading={isLoading} />
+          ) : (
+            <ScoreTable creatives={s.data} isLoading={isLoading} />
+          )}
         </div>
       ))}
     </div>

@@ -19,6 +19,7 @@ import type {
   UploadMeta,
   ActiveFilters,
   SplitRow,
+  GroupBy,
 } from "@/lib/types";
 
 const BUYING_TYPE_FILTERS = ["All", "Paid", "Boosting"] as const;
@@ -31,6 +32,7 @@ export default function Dashboard() {
   const [meta, setMeta] = useState<UploadMeta | null>(null);
   const [activeFilters, setActiveFilters] = useState<ActiveFilters>({});
   const [rankingsBuyingType, setRankingsBuyingType] = useState<BuyingTypeFilter>("All");
+  const [groupBy, setGroupBy] = useState<GroupBy>("creative_name");
   const [isUploading, setIsUploading] = useState(false);
   const [isRescoring, setIsRescoring] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -135,13 +137,29 @@ export default function Dashboard() {
               isRescoring={isRescoring}
             />
 
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500 uppercase tracking-wider mr-1">View by</span>
+              {(["creative_name", "concept"] as const).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGroupBy(g)}
+                  className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                    groupBy === g
+                      ? "bg-zinc-700 text-zinc-100"
+                      : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  }`}
+                >
+                  {g === "creative_name" ? "Creative" : "Concept"}
+                </button>
+              ))}
+            </div>
+
             <Tabs defaultValue="rankings" className="space-y-4">
               <TabsList className="w-full bg-zinc-900 border border-zinc-800 h-10">
                 <TabsTrigger value="rankings">Rankings</TabsTrigger>
                 <TabsTrigger value="platform">Platform</TabsTrigger>
                 <TabsTrigger value="by-dimension">By Dimension</TabsTrigger>
                 <TabsTrigger value="splits">Splits</TabsTrigger>
-                <TabsTrigger value="concepts">Concepts</TabsTrigger>
                 <TabsTrigger value="compare">Compare</TabsTrigger>
               </TabsList>
 
@@ -163,33 +181,34 @@ export default function Dashboard() {
                     ))}
                     <span className="text-xs text-zinc-600 ml-2 font-mono">
                       {rankingsCreatives.length} creatives
+                      {groupBy === "concept" && ` / ${aggregateByConcept(rankingsCreatives).length} concepts`}
                     </span>
                   </div>
-                  <ScoreTable creatives={rankingsCreatives} isLoading={isRescoring} />
+                  {groupBy === "concept" ? (
+                    <ConceptView
+                      concepts={aggregateByConcept(rankingsCreatives)}
+                      isLoading={isRescoring}
+                    />
+                  ) : (
+                    <ScoreTable creatives={rankingsCreatives} isLoading={isRescoring} />
+                  )}
                 </div>
               </TabsContent>
 
               <TabsContent value="platform">
-                <PlatformView creatives={displayedCreatives} isLoading={isRescoring} />
+                <PlatformView creatives={displayedCreatives} isLoading={isRescoring} groupBy={groupBy} />
               </TabsContent>
 
               <TabsContent value="by-dimension">
-                <DimensionView creatives={displayedCreatives} isLoading={isRescoring} />
+                <DimensionView creatives={displayedCreatives} isLoading={isRescoring} groupBy={groupBy} />
               </TabsContent>
 
               <TabsContent value="splits">
                 <SplitsTable splits={splits} />
               </TabsContent>
 
-              <TabsContent value="concepts">
-                <ConceptView
-                  concepts={aggregateByConcept(displayedCreatives)}
-                  isLoading={isRescoring}
-                />
-              </TabsContent>
-
               <TabsContent value="compare">
-                <ComparisonView uploadId={uploadId!} filters={filters} />
+                <ComparisonView uploadId={uploadId!} filters={filters} groupBy={groupBy} />
               </TabsContent>
             </Tabs>
           </>

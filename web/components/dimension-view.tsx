@@ -3,11 +3,14 @@
 import { useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScoreTable } from "./score-table";
-import type { Creative } from "@/lib/types";
+import { ConceptView } from "./concept-view";
+import { aggregateByConcept } from "@/lib/filters";
+import type { Creative, GroupBy } from "@/lib/types";
 
 interface DimensionViewProps {
   creatives: Creative[];
   isLoading?: boolean;
+  groupBy: GroupBy;
 }
 
 type DimensionKey = "os_target" | "placement" | "objective" | "asset_type_canonical";
@@ -23,10 +26,12 @@ function DimensionTab({
   creatives,
   dimensionKey,
   isLoading,
+  groupBy,
 }: {
   creatives: Creative[];
   dimensionKey: DimensionKey;
   isLoading?: boolean;
+  groupBy: GroupBy;
 }) {
   const groups = new Map<string, Creative[]>();
   for (const c of creatives) {
@@ -56,17 +61,23 @@ function DimensionTab({
           <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 mb-3 border-b border-zinc-800 pb-2">
             {groupName}
             <span className="ml-2 font-mono font-normal text-zinc-600">
-              ({groupCreatives.length})
+              ({groupBy === "concept"
+                ? `${aggregateByConcept(groupCreatives).length} concepts`
+                : `${groupCreatives.length} creatives`})
             </span>
           </h2>
-          <ScoreTable creatives={groupCreatives} isLoading={isLoading} />
+          {groupBy === "concept" ? (
+            <ConceptView concepts={aggregateByConcept(groupCreatives)} isLoading={isLoading} />
+          ) : (
+            <ScoreTable creatives={groupCreatives} isLoading={isLoading} />
+          )}
         </div>
       ))}
     </div>
   );
 }
 
-export function DimensionView({ creatives, isLoading }: DimensionViewProps) {
+export function DimensionView({ creatives, isLoading, groupBy }: DimensionViewProps) {
   const [activeDim, setActiveDim] = useState<DimensionKey>("os_target");
 
   return (
@@ -88,6 +99,7 @@ export function DimensionView({ creatives, isLoading }: DimensionViewProps) {
             creatives={creatives}
             dimensionKey={t.value}
             isLoading={isLoading}
+            groupBy={groupBy}
           />
         </TabsContent>
       ))}

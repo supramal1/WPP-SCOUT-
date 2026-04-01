@@ -61,6 +61,7 @@ class UploadResponse(BaseModel):
 class RescoreRequest(BaseModel):
     upload_id: str
     filters: dict[str, str]
+    sheets: dict[str, list[list]] | None = None
 
 
 class RescoreResponse(BaseModel):

@@ -164,9 +164,20 @@ def process_upload_json(sheets: dict[str, list[list]]) -> dict:
     }
 
 
-def process_rescore(upload_id: str, filters: dict[str, str]) -> dict | None:
-    """Rescore with filters: retrieve cached df_raw -> filter -> score -> serialize."""
+def process_rescore(
+    upload_id: str,
+    filters: dict[str, str],
+    sheets: dict[str, list[list]] | None = None,
+) -> dict | None:
+    """Rescore with filters: retrieve cached df_raw -> filter -> score -> serialize.
+
+    If the in-memory cache has expired (common on serverless), falls back to
+    re-loading from sheets data sent by the frontend.
+    """
     df_raw = upload_cache.get(upload_id)
+    if df_raw is None and sheets:
+        df_raw, _ = load_data_from_sheets(sheets)
+        upload_cache.store_with_id(upload_id, df_raw)
     if df_raw is None:
         return None
 

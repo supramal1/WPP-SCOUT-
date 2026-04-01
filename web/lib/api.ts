@@ -11,12 +11,22 @@ async function gzipString(str: string): Promise<Blob> {
   return new Response(stream).blob();
 }
 
+export type SheetData = Record<string, unknown[][]>;
+
+// Module-level storage for parsed sheets — survives across component renders
+let _cachedSheets: SheetData | null = null;
+
+export function getCachedSheets(): SheetData | null {
+  return _cachedSheets;
+}
+
 export async function uploadAndScore(
   file: File,
   onProgress?: (msg: string) => void
 ): Promise<UploadResponse> {
   onProgress?.("Parsing Excel file...");
   const sheets = await parseExcel(file);
+  _cachedSheets = sheets;
   const sheetNames = Object.keys(sheets);
   onProgress?.(`Scoring ${sheetNames.length} sheet(s)...`);
 
@@ -49,10 +59,32 @@ export async function rescore(
   uploadId: string,
   filters: ActiveFilters
 ): Promise<RescoreResponse> {
+  const payload: Record<string, unknown> = { upload_id: uploadId, filters };
+
+  // Include cached sheets so the backend can re-hydrate if in-memory cache expired
+  const sheets = _cachedSheets;
+  if (sheets) {
+    payload.sheets = sheets;
+  }
+
+  const json = JSON.stringify(payload);
+
+  // Gzip when payload is large (sheets included)
+  const useGzip = json.length > 50_000;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let body: BodyInit;
+
+  if (useGzip) {
+    headers["Content-Encoding"] = "gzip";
+    body = await gzipString(json);
+  } else {
+    body = json;
+  }
+
   const res = await fetch(`${API_BASE}/rescore`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ upload_id: uploadId, filters }),
+    headers,
+    body,
   });
 
   if (!res.ok) {

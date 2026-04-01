@@ -18,6 +18,10 @@ class UploadCache:
             self._entries[uid] = (time.time(), df)
         return uid
 
+    def store_with_id(self, upload_id: str, df: pd.DataFrame) -> None:
+        with self._lock:
+            self._entries[upload_id] = (time.time(), df)
+
     def get(self, upload_id: str) -> pd.DataFrame | None:
         with self._lock:
             entry = self._entries.get(upload_id)

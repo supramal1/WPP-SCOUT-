@@ -55,6 +55,15 @@ export async function uploadAndScore(
   return res.json();
 }
 
+async function parseErrorResponse(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    return data?.detail?.message || data?.message || fallback;
+  } catch {
+    return `${fallback} (HTTP ${res.status})`;
+  }
+}
+
 export async function rescore(
   uploadId: string,
   filters: ActiveFilters
@@ -68,22 +77,26 @@ export async function rescore(
 
   if (res.ok) return res.json();
 
-  // If cache expired (404) and we have sheets, retry with sheet data
+  // If cache expired (404) and we have sheets, retry with gzip-compressed sheet data
   if (res.status === 404 && _cachedSheets) {
+    const retryJson = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
+    const compressed = await gzipString(retryJson);
+
     const retryRes = await fetch(`${API_BASE}/rescore`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets }),
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+      },
+      body: compressed,
     });
 
     if (retryRes.ok) return retryRes.json();
 
-    const err: { detail: ApiError } = await retryRes.json();
-    throw new Error(err.detail?.message || "Rescore failed");
+    throw new Error(await parseErrorResponse(retryRes, "Rescore failed on retry"));
   }
 
-  const err: { detail: ApiError } = await res.json();
-  throw new Error(err.detail?.message || "Rescore failed");
+  throw new Error(await parseErrorResponse(res, "Rescore failed"));
 }
 
 export async function fetchSplits(uploadId: string): Promise<SplitRow[]> {

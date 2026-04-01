@@ -1,5 +1,6 @@
 import gzip
 import json
+import traceback
 from fastapi import APIRouter, Request, HTTPException
 from scoring.pipeline import process_rescore
 
@@ -38,7 +39,18 @@ async def rescore(request: Request):
             detail={"error": "missing_field", "message": "upload_id is required"},
         )
 
-    result = process_rescore(upload_id, filters, sheets)
+    try:
+        result = process_rescore(upload_id, filters, sheets)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "scoring_error",
+                "message": f"Scoring failed: {type(e).__name__}: {e}",
+            },
+        )
+
     if result is None:
         raise HTTPException(
             status_code=404,

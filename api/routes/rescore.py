@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from ..models import RescoreRequest
-from ..scoring.pipeline import process_rescore
+from models import RescoreRequest
+from scoring.pipeline import process_rescore
 
 router = APIRouter()
 

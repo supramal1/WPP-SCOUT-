@@ -1,5 +1,5 @@
 import pandas as pd
-from api.scoring.pipeline import process_upload, process_rescore
+from scoring.pipeline import process_upload, process_rescore
 
 
 def test_process_upload_returns_expected_shape(sample_excel_path):

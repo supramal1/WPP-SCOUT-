@@ -1,7 +1,13 @@
+import sys
+from pathlib import Path
+
+# Add api/ to sys.path so absolute imports (cache, scoring.*, routes.*, models)
+# resolve the same way they do on Vercel's @vercel/python runtime
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pytest
 import pandas as pd
 import openpyxl
-from pathlib import Path
 import tempfile
 
 

@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
-from ..cache import UploadCache
-from .loader import load_data
-from .scorer import score_raw_variants, assign_action
-from .explainer import generate_explanations
+from cache import UploadCache
+from scoring.loader import load_data
+from scoring.scorer import score_raw_variants, assign_action
+from scoring.explainer import generate_explanations
 
 # Global cache instance
 upload_cache = UploadCache(ttl_seconds=3600)

@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from ..scoring.pipeline import process_upload
+from scoring.pipeline import process_upload
 
 router = APIRouter()
 

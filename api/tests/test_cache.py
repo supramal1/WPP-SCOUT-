@@ -1,6 +1,6 @@
 import time
 import pandas as pd
-from api.cache import UploadCache
+from cache import UploadCache
 
 
 def test_store_and_retrieve():

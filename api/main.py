@@ -1,7 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes.upload import router as upload_router
-from .routes.rescore import router as rescore_router
 
 app = FastAPI(title="Creative Analyzer API", version="1.0.0")
 
@@ -12,6 +10,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Import and register routes after app is created to avoid circular imports
+# Use absolute imports for Vercel compatibility (relative imports fail in serverless)
+from routes.upload import router as upload_router
+from routes.rescore import router as rescore_router
 
 app.include_router(upload_router, prefix="/api")
 app.include_router(rescore_router, prefix="/api")

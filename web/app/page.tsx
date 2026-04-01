@@ -6,7 +6,8 @@ import { FilterBar } from "@/components/filter-bar";
 import { ScoreTable } from "@/components/score-table";
 import { StatCards } from "@/components/stat-cards";
 import { uploadAndScore, rescore } from "@/lib/api";
-import { applyFilters } from "@/lib/filters";
+import { applyFilters, aggregateByConcept } from "@/lib/filters";
+import { ConceptView } from "@/components/concept-view";
 import type {
   Creative,
   FilterOptions,
@@ -115,11 +116,14 @@ export default function Dashboard() {
               onGroupByChange={setGroupBy}
             />
 
-            {/* Task 17 replaces this with groupBy conditional */}
-            <ScoreTable
-              creatives={displayedCreatives}
-              isLoading={isRescoring}
-            />
+            {groupBy === "creative_name" ? (
+              <ScoreTable creatives={displayedCreatives} isLoading={isRescoring} />
+            ) : (
+              <ConceptView
+                concepts={aggregateByConcept(displayedCreatives)}
+                isLoading={isRescoring}
+              />
+            )}
           </>
         )}
       </div>

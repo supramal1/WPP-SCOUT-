@@ -442,7 +442,11 @@ def compute_attention_proxy_inputs(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_sheet(
-    xl: pd.ExcelFile, sheet_name: str, platform_default: str, buying_type: str
+    xl: pd.ExcelFile,
+    sheet_name: str,
+    platform_default: str,
+    buying_type: str,
+    header: int = 2,
 ) -> pd.DataFrame:
     """Load one 'Data Analysis' sheet and normalise to internal schema.
 
@@ -455,7 +459,7 @@ def _load_sheet(
     - '2s VTR' (TikTok) or '3s VTR' (Meta) — both mapped to vtr_2s internally
     - No Wooshi brand measurement columns
     """
-    df = pd.read_excel(xl, sheet_name=sheet_name, header=2)
+    df = pd.read_excel(xl, sheet_name=sheet_name, header=header)
 
     # Normalise column names: strip whitespace and collapse embedded newlines
     df.columns = [
@@ -878,38 +882,37 @@ def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 def _load_sheet_from_rows(
     rows: list[list], sheet_name: str, platform_default: str, buying_type: str
 ) -> pd.DataFrame:
-    """Load a sheet from pre-parsed JSON rows (same as _load_sheet but without ExcelFile).
+    """Load a sheet from pre-parsed JSON rows — builds DataFrame directly, no disk I/O.
 
     Expects rows as array-of-arrays where row 0-1 are metadata (Report/Date range)
     and row 2 is headers — matching the Pixel DE format that _load_sheet reads with header=2.
+
+    Constructs a DataFrame from rows, writes to an in-memory xlsx buffer (no disk),
+    and calls _load_sheet with header=0 since metadata rows are skipped.
     """
     if len(rows) < 4:
         return pd.DataFrame()
 
-    import tempfile
-    from pathlib import Path
+    import io
 
-    # Pad all rows to the same width — client-side trimming strips trailing
-    # nulls, producing ragged rows that break pd.read_excel.
-    max_cols = max(len(r) for r in rows) if rows else 0
+    # Row 2 is headers, rows 3+ are data
+    headers = [
+        str(c).strip().replace("\n", " ") if c is not None else "" for c in rows[2]
+    ]
+    data_rows = rows[3:]
 
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        import openpyxl
+    # Pad rows to header width
+    n_cols = len(headers)
+    padded = [(list(row) + [None] * (n_cols - len(row)))[:n_cols] for row in data_rows]
 
-        wb = openpyxl.Workbook()
-        wb.remove(wb.active)
-        ws = wb.create_sheet(sheet_name)
-        for row in rows:
-            padded = list(row) + [None] * (max_cols - len(row))
-            ws.append([c if c is not None else "" for c in padded])
-        wb.save(tmp.name)
-        tmp_path = tmp.name
+    df = pd.DataFrame(padded, columns=headers)
 
-    try:
-        xl = pd.ExcelFile(tmp_path)
-        return _load_sheet(xl, sheet_name, platform_default, buying_type)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    # Write to in-memory xlsx buffer (much faster than openpyxl row-by-row + disk)
+    buf = io.BytesIO()
+    df.to_excel(buf, sheet_name=sheet_name, index=False, engine="openpyxl")
+    buf.seek(0)
+    xl = pd.ExcelFile(buf, engine="openpyxl")
+    return _load_sheet(xl, sheet_name, platform_default, buying_type, header=0)
 
 
 def load_data_from_sheets(

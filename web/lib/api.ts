@@ -68,8 +68,6 @@ export async function rescore(
   uploadId: string,
   filters: ActiveFilters
 ): Promise<RescoreResponse> {
-  console.log("[rescore] start", { uploadId, filters, hasCachedSheets: !!_cachedSheets });
-
   // First attempt: without sheets (fast, small payload)
   const res = await fetch(`${API_BASE}/rescore`, {
     method: "POST",
@@ -77,34 +75,18 @@ export async function rescore(
     body: JSON.stringify({ upload_id: uploadId, filters }),
   });
 
-  console.log("[rescore] first attempt", res.status);
-
   if (res.ok) return res.json();
 
   // If cache expired (404) and we have sheets, retry with sheet data
   if (res.status === 404 && _cachedSheets) {
-    console.log("[rescore] retrying with sheets (plain JSON)...");
-    const retryBody = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
-    console.log("[rescore] retry payload size", retryBody.length);
-
     const retryRes = await fetch(`${API_BASE}/rescore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: retryBody,
+      body: JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets }),
     });
 
-    console.log("[rescore] retry result", retryRes.status);
-
     if (retryRes.ok) return retryRes.json();
-
-    const retryErrText = await retryRes.text().catch(() => "no body");
-    console.log("[rescore] retry error body:", retryErrText.slice(0, 500));
-    try {
-      const parsed = JSON.parse(retryErrText);
-      throw new Error(parsed?.detail?.message || "Rescore failed on retry");
-    } catch {
-      throw new Error(`Rescore failed on retry (HTTP ${retryRes.status})`);
-    }
+    throw new Error(await parseErrorResponse(retryRes, "Rescore failed on retry"));
   }
 
   throw new Error(await parseErrorResponse(res, "Rescore failed"));

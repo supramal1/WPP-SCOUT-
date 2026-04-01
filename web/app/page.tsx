@@ -8,6 +8,8 @@ import { StatCards } from "@/components/stat-cards";
 import { uploadAndScore, rescore } from "@/lib/api";
 import { applyFilters, aggregateByConcept } from "@/lib/filters";
 import { ConceptView } from "@/components/concept-view";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ComparisonView } from "@/components/comparison-view";
 import type {
   Creative,
   FilterOptions,
@@ -116,14 +118,25 @@ export default function Dashboard() {
               onGroupByChange={setGroupBy}
             />
 
-            {groupBy === "creative_name" ? (
-              <ScoreTable creatives={displayedCreatives} isLoading={isRescoring} />
-            ) : (
-              <ConceptView
-                concepts={aggregateByConcept(displayedCreatives)}
-                isLoading={isRescoring}
-              />
-            )}
+            <Tabs defaultValue="rankings" className="space-y-4">
+              <TabsList className="bg-zinc-900 border border-zinc-800">
+                <TabsTrigger value="rankings">Rankings</TabsTrigger>
+                <TabsTrigger value="compare">Compare</TabsTrigger>
+              </TabsList>
+              <TabsContent value="rankings">
+                {groupBy === "creative_name" ? (
+                  <ScoreTable creatives={displayedCreatives} isLoading={isRescoring} />
+                ) : (
+                  <ConceptView
+                    concepts={aggregateByConcept(displayedCreatives)}
+                    isLoading={isRescoring}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="compare">
+                <ComparisonView uploadId={uploadId!} filters={filters} />
+              </TabsContent>
+            </Tabs>
           </>
         )}
       </div>

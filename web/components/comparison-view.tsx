@@ -20,7 +20,7 @@ import {
 import { TierBadge } from "./tier-badge";
 import { rescore } from "@/lib/api";
 import { aggregateByConcept } from "@/lib/filters";
-import type { FilterOptions, GroupBy, RescoreResponse } from "@/lib/types";
+import type { Creative, FilterOptions, GroupBy, RescoreResponse, ConceptGroup } from "@/lib/types";
 
 interface ComparisonViewProps {
   uploadId: string;
@@ -39,10 +39,71 @@ const DIMENSION_OPTIONS: { key: string; label: string; optionsKey: keyof FilterO
   { key: "format", label: "Format", optionsKey: "formats" },
 ];
 
+// Metrics to display in the comparison table
+const METRICS: { key: string; label: string; format: (v: number | null) => string }[] = [
+  { key: "composite_score", label: "Score", format: (v) => v != null ? v.toFixed(1) : "--" },
+  { key: "vtr_2s", label: "VTR", format: (v) => v != null ? `${v.toFixed(1)}%` : "--" },
+  { key: "ctr", label: "CTR", format: (v) => v != null ? `${v.toFixed(2)}%` : "--" },
+  { key: "engagement_rate", label: "Eng. Rate", format: (v) => v != null ? `${v.toFixed(2)}%` : "--" },
+  { key: "completion_rate", label: "Completion", format: (v) => v != null ? `${v.toFixed(2)}%` : "--" },
+  { key: "cpm", label: "CPM", format: (v) => v != null ? `€${v.toFixed(2)}` : "--" },
+  { key: "spend", label: "Spend", format: (v) => v != null ? `€${v.toLocaleString("en", { maximumFractionDigits: 0 })}` : "--" },
+  { key: "impressions", label: "Impressions", format: (v) => v != null ? v.toLocaleString("en") : "--" },
+  { key: "reach", label: "Reach", format: (v) => v != null ? v.toLocaleString("en") : "--" },
+  { key: "frequency", label: "Frequency", format: (v) => v != null ? v.toFixed(1) : "--" },
+];
+
+interface CreativeMetrics {
+  composite_score: number;
+  tier: string;
+  vtr_2s: number;
+  ctr: number;
+  engagement_rate: number;
+  completion_rate: number;
+  cpm: number;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+}
+
 interface ComparisonRow {
   name: string;
-  scores: Record<string, { score: number; tier: string } | null>;
-  spread: number | null;
+  metrics: Record<string, CreativeMetrics | null>;
+}
+
+function extractMetrics(c: Creative | ConceptGroup): CreativeMetrics {
+  return {
+    composite_score: c.composite_score,
+    tier: c.tier,
+    vtr_2s: c.vtr_2s,
+    ctr: c.ctr,
+    engagement_rate: c.engagement_rate,
+    completion_rate: c.completion_rate,
+    cpm: c.cpm,
+    spend: c.spend,
+    impressions: c.impressions,
+    reach: c.reach,
+    frequency: c.frequency,
+  };
+}
+
+/** Highlight the best value across dimension columns for a given metric row */
+function metricCellClass(
+  metricKey: string,
+  value: number | null,
+  allValues: (number | null)[]
+): string {
+  if (value == null) return "text-zinc-600";
+  const valid = allValues.filter((v): v is number => v != null);
+  if (valid.length < 2) return "text-zinc-300";
+
+  // Lower is better for CPM and spend
+  const lowerIsBetter = metricKey === "cpm";
+  const best = lowerIsBetter ? Math.min(...valid) : Math.max(...valid);
+
+  if (value === best) return "text-emerald-400 font-semibold";
+  return "text-zinc-300";
 }
 
 export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewProps) {
@@ -51,6 +112,7 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
   const [comparedValues, setComparedValues] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedMetric, setSelectedMetric] = useState("composite_score");
 
   const currentDef = DIMENSION_OPTIONS.find((d) => d.key === dimension)!;
   const options = filters[currentDef.optionsKey] ?? [];
@@ -76,24 +138,19 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
         results.push(await rescore(uploadId, { [dimension]: val }));
       }
 
-      // Build a map per dimension value: name -> { score, tier }
+      // Build a map per dimension value: name -> full metrics
       const valueMaps = options.map((val, i) => {
         if (groupBy === "concept") {
           const concepts = aggregateByConcept(results[i].creatives);
           return {
             val,
-            map: new Map(
-              concepts.map((g) => [g.concept, { score: g.composite_score, tier: g.tier }])
-            ),
+            map: new Map(concepts.map((g) => [g.concept, extractMetrics(g)])),
           };
         }
         return {
           val,
           map: new Map(
-            results[i].creatives.map((c) => [
-              c.creative_name,
-              { score: c.composite_score, tier: c.tier },
-            ])
+            results[i].creatives.map((c) => [c.creative_name, extractMetrics(c)])
           ),
         };
       });
@@ -105,20 +162,18 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
 
       const compared: ComparisonRow[] = Array.from(allNames)
         .map((name) => {
-          const scores: Record<string, { score: number; tier: string } | null> = {};
-          const validScores: number[] = [];
+          const metrics: Record<string, CreativeMetrics | null> = {};
           for (const { val, map } of valueMaps) {
-            const entry = map.get(name) ?? null;
-            scores[val] = entry;
-            if (entry) validScores.push(entry.score);
+            metrics[val] = map.get(name) ?? null;
           }
-          const spread =
-            validScores.length >= 2
-              ? Math.round((Math.max(...validScores) - Math.min(...validScores)) * 10) / 10
-              : null;
-          return { name, scores, spread };
+          return { name, metrics };
         })
-        .sort((a, b) => Math.abs(b.spread ?? 0) - Math.abs(a.spread ?? 0));
+        .sort((a, b) => {
+          // Sort by best average score descending
+          const avgA = average(Object.values(a.metrics).map((m) => m?.composite_score ?? null));
+          const avgB = average(Object.values(b.metrics).map((m) => m?.composite_score ?? null));
+          return avgB - avgA;
+        });
 
       setComparedValues(options);
       setRows(compared);
@@ -129,9 +184,11 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
     }
   }, [uploadId, dimension, options, groupBy]);
 
+  const currentMetricDef = METRICS.find((m) => m.key === selectedMetric)!;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-end gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1">
           <label className="text-xs text-zinc-500 uppercase">Dimension</label>
           <Select value={dimension} onValueChange={handleDimensionChange}>
@@ -141,6 +198,19 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
             <SelectContent>
               {DIMENSION_OPTIONS.map((d) => (
                 <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-zinc-500 uppercase">Metric</label>
+          <Select value={selectedMetric} onValueChange={(v) => v && setSelectedMetric(v)}>
+            <SelectTrigger className="w-[160px] bg-zinc-900 border-zinc-700">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {METRICS.map((m) => (
+                <SelectItem key={m.key} value={m.key}>{m.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -167,52 +237,94 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
       )}
 
       {rows.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow className="border-zinc-800 hover:bg-transparent">
-              <TableHead className="text-zinc-500">
-                {groupBy === "concept" ? "Concept" : "Creative"}
-              </TableHead>
-              {comparedValues.map((val) => (
-                <TableHead key={val} className="text-zinc-500">{val}</TableHead>
-              ))}
-              <TableHead className="text-zinc-500">Spread</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.name} className="border-zinc-800">
-                <TableCell className="font-medium">{r.name}</TableCell>
-                {comparedValues.map((val) => {
-                  const entry = r.scores[val];
-                  return (
-                    <TableCell key={val}>
-                      {entry ? (
-                        <TierBadge tier={entry.tier} score={entry.score} />
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-zinc-800 hover:bg-transparent">
+                <TableHead className="text-zinc-500 sticky left-0 bg-zinc-950 z-10">
+                  {groupBy === "concept" ? "Concept" : "Creative"}
+                </TableHead>
+                {comparedValues.map((val) => (
+                  <TableHead key={val} className="text-zinc-500 text-center min-w-[120px]">
+                    <div>{val}</div>
+                    <div className="text-[10px] text-zinc-600 font-normal">{currentMetricDef.label}</div>
+                  </TableHead>
+                ))}
+                <TableHead className="text-zinc-500 text-center min-w-[80px]">Spread</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => {
+                const values = comparedValues.map(
+                  (val) => (r.metrics[val]?.[selectedMetric as keyof CreativeMetrics] as number) ?? null
+                );
+                const valid = values.filter((v): v is number => v != null);
+                const spread =
+                  valid.length >= 2
+                    ? Math.round((Math.max(...valid) - Math.min(...valid)) * 100) / 100
+                    : null;
+
+                return (
+                  <TableRow key={r.name} className="border-zinc-800">
+                    <TableCell className="font-medium sticky left-0 bg-zinc-950 z-10 max-w-[250px] truncate">
+                      {selectedMetric === "composite_score" && r.metrics[comparedValues[0]] ? (
+                        <div className="flex items-center gap-2">
+                          <TierBadge
+                            tier={r.metrics[comparedValues[0]]!.tier}
+                            score={r.metrics[comparedValues[0]]!.composite_score}
+                          />
+                          <span className="truncate">{r.name}</span>
+                        </div>
+                      ) : (
+                        r.name
+                      )}
+                    </TableCell>
+                    {comparedValues.map((val, i) => {
+                      const m = r.metrics[val];
+                      const v = values[i];
+                      return (
+                        <TableCell key={val} className="text-center">
+                          {selectedMetric === "composite_score" && m ? (
+                            <TierBadge tier={m.tier} score={m.composite_score} />
+                          ) : (
+                            <span
+                              className={`font-mono text-sm ${metricCellClass(selectedMetric, v, values)}`}
+                            >
+                              {currentMetricDef.format(v)}
+                            </span>
+                          )}
+                        </TableCell>
+                      );
+                    })}
+                    <TableCell className="text-center">
+                      {spread !== null ? (
+                        <span
+                          className={`font-mono text-sm ${
+                            selectedMetric === "composite_score" && spread > 15
+                              ? "text-amber-400 font-bold"
+                              : "text-zinc-400"
+                          }`}
+                        >
+                          {selectedMetric === "composite_score"
+                            ? spread.toFixed(1)
+                            : currentMetricDef.format(spread)}
+                        </span>
                       ) : (
                         <span className="text-zinc-600">--</span>
                       )}
                     </TableCell>
-                  );
-                })}
-                <TableCell>
-                  {r.spread !== null ? (
-                    <span
-                      className={`font-mono text-sm ${
-                        r.spread > 15 ? "text-amber-400 font-bold" : "text-zinc-400"
-                      }`}
-                    >
-                      {r.spread}
-                    </span>
-                  ) : (
-                    <span className="text-zinc-600">--</span>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   );
+}
+
+function average(values: (number | null)[]): number {
+  const valid = values.filter((v): v is number => v != null);
+  return valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
 }

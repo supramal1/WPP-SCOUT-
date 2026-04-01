@@ -81,20 +81,16 @@ export async function rescore(
 
   if (res.ok) return res.json();
 
-  // If cache expired (404) and we have sheets, retry with gzip-compressed sheet data
+  // If cache expired (404) and we have sheets, retry with sheet data
   if (res.status === 404 && _cachedSheets) {
-    console.log("[rescore] retrying with sheets (gzip)...");
-    const retryJson = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
-    const compressed = await gzipString(retryJson);
-    console.log("[rescore] payload size", retryJson.length, "-> compressed", compressed.size);
+    console.log("[rescore] retrying with sheets (plain JSON)...");
+    const retryBody = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
+    console.log("[rescore] retry payload size", retryBody.length);
 
     const retryRes = await fetch(`${API_BASE}/rescore`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Encoding": "gzip",
-      },
-      body: compressed,
+      headers: { "Content-Type": "application/json" },
+      body: retryBody,
     });
 
     console.log("[rescore] retry result", retryRes.status);

@@ -33,6 +33,14 @@ async def rescore(request: Request):
     filters = payload.get("filters", {})
     sheets = payload.get("sheets")
 
+    print(
+        f"[rescore] upload_id={upload_id} filters={filters} "
+        f"has_sheets={sheets is not None} "
+        f"sheets_type={type(sheets).__name__} "
+        f"sheets_keys={list(sheets.keys()) if isinstance(sheets, dict) else 'N/A'} "
+        f"body_len={len(raw)} encoding={encoding!r}"
+    )
+
     if not upload_id:
         raise HTTPException(
             status_code=400,
@@ -52,6 +60,7 @@ async def rescore(request: Request):
         )
 
     if result is None:
+        print(f"[rescore] RETURNING 404 — sheets was {'truthy' if sheets else 'falsy'}")
         raise HTTPException(
             status_code=404,
             detail={
@@ -59,4 +68,5 @@ async def rescore(request: Request):
                 "message": "Session expired. Please re-upload your file.",
             },
         )
+    print(f"[rescore] OK — {len(result.get('creatives', []))} creatives")
     return result

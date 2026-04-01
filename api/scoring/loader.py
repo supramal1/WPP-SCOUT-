@@ -883,37 +883,11 @@ def _load_sheet_from_rows(
     if len(rows) < 4:
         return pd.DataFrame()
 
-    # Row index 2 = headers (same as header=2 in pd.read_excel)
-    headers = [
-        str(c).strip().replace("\n", " ") if c is not None else "" for c in rows[2]
-    ]
-    data_rows = rows[3:]
-
-    df = pd.DataFrame(data_rows, columns=headers)
-    # Convert numeric-looking strings back to numbers
-    df = df.apply(pd.to_numeric, errors="ignore")
-
-    # Delegate to _load_sheet by creating a temporary ExcelFile
-    # Instead, replicate the column processing inline using the existing normalizers
-    # Drop completely empty rows
-    if "Creative Name" not in df.columns:
-        return pd.DataFrame()
-
-    df = df.dropna(subset=["Creative Name"], how="all")
-    df = df[
-        df["Creative Name"].notna()
-        & (df["Creative Name"].astype(str).str.strip() != "")
-    ]
-
-    if df.empty:
-        return pd.DataFrame()
-
-    # Write to a temp Excel so we can reuse _load_sheet exactly
     import tempfile
     from pathlib import Path
 
-    # Find the max row width (header row) so all rows are padded to the same length.
-    # Client-side trimming may produce ragged rows which breaks pd.read_excel.
+    # Pad all rows to the same width — client-side trimming strips trailing
+    # nulls, producing ragged rows that break pd.read_excel.
     max_cols = max(len(r) for r in rows) if rows else 0
 
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:

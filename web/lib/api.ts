@@ -1,10 +1,12 @@
 import type { UploadResponse, RescoreResponse, ApiError, ActiveFilters } from "./types";
+import { stripExcel } from "./excel-strip";
 
 const API_BASE = "/api";
 
 export async function uploadAndScore(file: File): Promise<UploadResponse> {
+  const stripped = await stripExcel(file);
   const formData = new FormData();
-  formData.append("file", file);
+  formData.append("file", stripped);
 
   const res = await fetch(`${API_BASE}/upload-and-score`, {
     method: "POST",

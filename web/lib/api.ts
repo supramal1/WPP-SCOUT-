@@ -3,6 +3,12 @@ import { parseExcel } from "./excel-strip";
 
 const API_BASE = "/api";
 
+// Direct backend URL for large payloads — bypasses the Next.js rewrite proxy
+// which can timeout or reject large bodies.
+const DIRECT_API_BASE = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+  : "/api";
+
 /** Gzip a string using the browser's CompressionStream API. Returns a Blob. */
 async function gzipString(str: string): Promise<Blob> {
   const blob = new Blob([str]);
@@ -77,9 +83,11 @@ export async function rescore(
 
   if (res.ok) return res.json();
 
-  // If cache expired (404) and we have sheets, retry with sheet data
+  // If cache expired (404) and we have sheets, retry with sheet data.
+  // Use direct API URL to bypass the Next.js rewrite proxy which can
+  // timeout on large payloads.
   if (res.status === 404 && _cachedSheets) {
-    const retryRes = await fetch(`${API_BASE}/rescore`, {
+    const retryRes = await fetch(`${DIRECT_API_BASE}/rescore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets }),

@@ -208,7 +208,7 @@ export default function Dashboard() {
               </TabsContent>
 
               <TabsContent value="compare">
-                <ComparisonView uploadId={uploadId!} filters={filters} groupBy={groupBy} />
+                <ComparisonView uploadId={uploadId!} filters={filters} activeFilters={activeFilters} groupBy={groupBy} />
               </TabsContent>
             </Tabs>
           </>

@@ -20,11 +20,19 @@ import {
 import { TierBadge } from "./tier-badge";
 import { rescore } from "@/lib/api";
 import { aggregateByConcept } from "@/lib/filters";
-import type { Creative, FilterOptions, GroupBy, RescoreResponse, ConceptGroup } from "@/lib/types";
+import type {
+  Creative,
+  FilterOptions,
+  ActiveFilters,
+  GroupBy,
+  RescoreResponse,
+  ConceptGroup,
+} from "@/lib/types";
 
 interface ComparisonViewProps {
   uploadId: string;
   filters: FilterOptions;
+  activeFilters: ActiveFilters;
   groupBy: GroupBy;
 }
 
@@ -35,11 +43,9 @@ const DIMENSION_OPTIONS: { key: string; label: string; optionsKey: keyof FilterO
   { key: "placement", label: "Placement", optionsKey: "placements" },
   { key: "objective", label: "Objective", optionsKey: "objectives" },
   { key: "buying_type", label: "Buying Type", optionsKey: "buying_types" },
-  { key: "concept", label: "Concept", optionsKey: "concepts" },
   { key: "format", label: "Format", optionsKey: "formats" },
 ];
 
-// Metrics to display in the comparison table
 const METRICS: { key: string; label: string; format: (v: number | null) => string }[] = [
   { key: "composite_score", label: "Score", format: (v) => v != null ? v.toFixed(1) : "--" },
   { key: "vtr_2s", label: "VTR", format: (v) => v != null ? `${v.toFixed(1)}%` : "--" },
@@ -88,7 +94,6 @@ function extractMetrics(c: Creative | ConceptGroup): CreativeMetrics {
   };
 }
 
-/** Highlight the best value across dimension columns for a given metric row */
 function metricCellClass(
   metricKey: string,
   value: number | null,
@@ -97,16 +102,18 @@ function metricCellClass(
   if (value == null) return "text-zinc-600";
   const valid = allValues.filter((v): v is number => v != null);
   if (valid.length < 2) return "text-zinc-300";
-
-  // Lower is better for CPM and spend
   const lowerIsBetter = metricKey === "cpm";
   const best = lowerIsBetter ? Math.min(...valid) : Math.max(...valid);
-
   if (value === best) return "text-emerald-400 font-semibold";
   return "text-zinc-300";
 }
 
-export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewProps) {
+function average(values: (number | null)[]): number {
+  const valid = values.filter((v): v is number => v != null);
+  return valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+}
+
+export function ComparisonView({ uploadId, filters, activeFilters, groupBy }: ComparisonViewProps) {
   const [dimension, setDimension] = useState("asset_subtype");
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [comparedValues, setComparedValues] = useState<string[]>([]);
@@ -116,6 +123,11 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
 
   const currentDef = DIMENSION_OPTIONS.find((d) => d.key === dimension)!;
   const options = filters[currentDef.optionsKey] ?? [];
+
+  // Don't include the pivot dimension in global filters (would conflict)
+  const baseFilters = Object.fromEntries(
+    Object.entries(activeFilters).filter(([k, v]) => k !== dimension && v && v !== "All")
+  );
 
   const handleDimensionChange = useCallback((v: string | null) => {
     if (v) {
@@ -130,15 +142,11 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
     setIsLoading(true);
     setError(null);
     try {
-      // Serialize requests: first call may need to send sheets to warm the
-      // server cache (cold serverless instance). Once warmed, subsequent
-      // calls hit the same instance's cache and are fast.
       const results: RescoreResponse[] = [];
       for (const val of options) {
-        results.push(await rescore(uploadId, { [dimension]: val }));
+        results.push(await rescore(uploadId, { ...baseFilters, [dimension]: val }));
       }
 
-      // Build a map per dimension value: name -> full metrics
       const valueMaps = options.map((val, i) => {
         if (groupBy === "concept") {
           const concepts = aggregateByConcept(results[i].creatives);
@@ -169,7 +177,6 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
           return { name, metrics };
         })
         .sort((a, b) => {
-          // Sort by best average score descending
           const avgA = average(Object.values(a.metrics).map((m) => m?.composite_score ?? null));
           const avgB = average(Object.values(b.metrics).map((m) => m?.composite_score ?? null));
           return avgB - avgA;
@@ -182,15 +189,18 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
     } finally {
       setIsLoading(false);
     }
-  }, [uploadId, dimension, options, groupBy]);
+  }, [uploadId, dimension, options, groupBy, baseFilters]);
 
   const currentMetricDef = METRICS.find((m) => m.key === selectedMetric)!;
+  const activeGlobalFilters = Object.entries(activeFilters)
+    .filter(([k, v]) => v && v !== "All" && k !== dimension)
+    .map(([k, v]) => `${k}=${v}`);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-zinc-500 uppercase">Dimension</label>
+          <label className="text-xs text-zinc-500 uppercase">Pivot by</label>
           <Select value={dimension} onValueChange={handleDimensionChange}>
             <SelectTrigger className="w-[220px] bg-zinc-900 border-zinc-700">
               <SelectValue />
@@ -216,9 +226,9 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
           </Select>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-zinc-500 uppercase">Values</label>
+          <label className="text-xs text-zinc-500 uppercase">Comparing</label>
           <span className="text-sm text-zinc-400 px-2 py-1.5">
-            {options.length > 0 ? options.join(" vs ") : "No values"}
+            {options.length > 0 ? `${options.length} values` : "No values"}
           </span>
         </div>
         <Button
@@ -229,6 +239,12 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
           {isLoading ? "Comparing..." : "Compare"}
         </Button>
       </div>
+
+      {activeGlobalFilters.length > 0 && (
+        <div className="text-xs text-zinc-500">
+          Active filters: {activeGlobalFilters.join(", ")}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md bg-red-950/50 border border-red-900 p-3 text-sm text-red-300">
@@ -322,9 +338,4 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
       )}
     </div>
   );
-}
-
-function average(values: (number | null)[]): number {
-  const valid = values.filter((v): v is number => v != null);
-  return valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
 }

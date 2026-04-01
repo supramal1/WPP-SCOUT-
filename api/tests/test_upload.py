@@ -37,3 +37,22 @@ def test_upload_no_matching_sheets(client):
     )
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "no_sheets"
+
+
+def test_upload_gzipped_json(client, sample_sheets_json):
+    import gzip
+    import json
+
+    body = gzip.compress(json.dumps({"sheets": sample_sheets_json}).encode())
+    response = client.post(
+        "/api/upload-and-score",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "Content-Encoding": "gzip",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "upload_id" in data
+    assert len(data["creatives"]) > 0

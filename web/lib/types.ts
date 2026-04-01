@@ -70,6 +70,31 @@ export type ActiveFilters = Partial<Record<string, string>>;
 
 export type GroupBy = "creative_name" | "concept";
 
+export interface SplitRow {
+  creative_name: string;
+  platform: string;
+  buying_type: string;
+  format_canonical: string;
+  placement_canonical: string;
+  objective_normalized: string;
+  os_target: string;
+  asset_type_canonical: string;
+  campaign_normalized: string;
+  audience_segment: string;
+  concept: string;
+  spend: number;
+  reach: number;
+  impressions: number;
+  frequency: number;
+  vtr_2s: number;
+  completion_rate: number;
+  ctr: number;
+  engagement_rate: number;
+  cpm: number;
+  duration_s: number | null;
+  low_confidence: boolean;
+}
+
 export interface ConceptGroup {
   concept: string;
   composite_score: number;

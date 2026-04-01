@@ -5,9 +5,12 @@ import { UploadZone } from "@/components/upload-zone";
 import { FilterBar } from "@/components/filter-bar";
 import { ScoreTable } from "@/components/score-table";
 import { StatCards } from "@/components/stat-cards";
-import { uploadAndScore, rescore } from "@/lib/api";
+import { uploadAndScore, rescore, fetchSplits } from "@/lib/api";
 import { applyFilters, aggregateByConcept } from "@/lib/filters";
 import { ConceptView } from "@/components/concept-view";
+import { PlatformView } from "@/components/platform-view";
+import { DimensionView } from "@/components/dimension-view";
+import { SplitsTable } from "@/components/splits-table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ComparisonView } from "@/components/comparison-view";
 import type {
@@ -15,8 +18,11 @@ import type {
   FilterOptions,
   UploadMeta,
   ActiveFilters,
-  GroupBy,
+  SplitRow,
 } from "@/lib/types";
+
+const BUYING_TYPE_FILTERS = ["All", "Paid", "Boosting"] as const;
+type BuyingTypeFilter = (typeof BUYING_TYPE_FILTERS)[number];
 
 export default function Dashboard() {
   const [uploadId, setUploadId] = useState<string | null>(null);
@@ -24,11 +30,13 @@ export default function Dashboard() {
   const [filters, setFilters] = useState<FilterOptions | null>(null);
   const [meta, setMeta] = useState<UploadMeta | null>(null);
   const [activeFilters, setActiveFilters] = useState<ActiveFilters>({});
-  const [groupBy, setGroupBy] = useState<GroupBy>("creative_name");
+  const [rankingsBuyingType, setRankingsBuyingType] = useState<BuyingTypeFilter>("All");
   const [isUploading, setIsUploading] = useState(false);
   const [isRescoring, setIsRescoring] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const [splits, setSplits] = useState<SplitRow[]>([]);
 
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
@@ -41,6 +49,10 @@ export default function Dashboard() {
       setFilters(result.filters);
       setMeta(result.meta);
       setActiveFilters({});
+      // Fetch raw splits in the background
+      fetchSplits(result.upload_id)
+        .then(setSplits)
+        .catch(() => setSplits([]));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -75,6 +87,13 @@ export default function Dashboard() {
   const displayedCreatives = filters
     ? applyFilters(allCreatives, activeFilters)
     : allCreatives;
+
+  const rankingsCreatives =
+    rankingsBuyingType === "All"
+      ? displayedCreatives
+      : displayedCreatives.filter(
+          (c) => c.buying_type.toLowerCase() === rankingsBuyingType.toLowerCase()
+        );
 
   const hasData = allCreatives.length > 0 && filters && meta;
 
@@ -114,25 +133,61 @@ export default function Dashboard() {
               onFilterChange={handleFilterChange}
               onRescore={handleRescore}
               isRescoring={isRescoring}
-              groupBy={groupBy}
-              onGroupByChange={setGroupBy}
             />
 
             <Tabs defaultValue="rankings" className="space-y-4">
               <TabsList className="bg-zinc-900 border border-zinc-800">
                 <TabsTrigger value="rankings">Rankings</TabsTrigger>
+                <TabsTrigger value="platform">Platform</TabsTrigger>
+                <TabsTrigger value="by-dimension">By Dimension</TabsTrigger>
+                <TabsTrigger value="splits">Splits</TabsTrigger>
+                <TabsTrigger value="concepts">Concepts</TabsTrigger>
                 <TabsTrigger value="compare">Compare</TabsTrigger>
               </TabsList>
+
               <TabsContent value="rankings">
-                {groupBy === "creative_name" ? (
-                  <ScoreTable creatives={displayedCreatives} isLoading={isRescoring} />
-                ) : (
-                  <ConceptView
-                    concepts={aggregateByConcept(displayedCreatives)}
-                    isLoading={isRescoring}
-                  />
-                )}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    {BUYING_TYPE_FILTERS.map((bt) => (
+                      <button
+                        key={bt}
+                        onClick={() => setRankingsBuyingType(bt)}
+                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                          rankingsBuyingType === bt
+                            ? "bg-zinc-700 text-zinc-100"
+                            : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                        }`}
+                      >
+                        {bt}
+                      </button>
+                    ))}
+                    <span className="text-xs text-zinc-600 ml-2 font-mono">
+                      {rankingsCreatives.length} creatives
+                    </span>
+                  </div>
+                  <ScoreTable creatives={rankingsCreatives} isLoading={isRescoring} />
+                </div>
               </TabsContent>
+
+              <TabsContent value="platform">
+                <PlatformView creatives={displayedCreatives} isLoading={isRescoring} />
+              </TabsContent>
+
+              <TabsContent value="by-dimension">
+                <DimensionView creatives={displayedCreatives} isLoading={isRescoring} />
+              </TabsContent>
+
+              <TabsContent value="splits">
+                <SplitsTable splits={splits} />
+              </TabsContent>
+
+              <TabsContent value="concepts">
+                <ConceptView
+                  concepts={aggregateByConcept(displayedCreatives)}
+                  isLoading={isRescoring}
+                />
+              </TabsContent>
+
               <TabsContent value="compare">
                 <ComparisonView uploadId={uploadId!} filters={filters} />
               </TabsContent>

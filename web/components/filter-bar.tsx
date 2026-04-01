@@ -8,7 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import type { FilterOptions, ActiveFilters, GroupBy } from "@/lib/types";
+import type { FilterOptions, ActiveFilters } from "@/lib/types";
 
 interface FilterBarProps {
   filters: FilterOptions;
@@ -16,8 +16,6 @@ interface FilterBarProps {
   onFilterChange: (key: string, value: string) => void;
   onRescore: () => void;
   isRescoring: boolean;
-  groupBy: GroupBy;
-  onGroupByChange: (g: GroupBy) => void;
 }
 
 const FILTER_DEFS: { key: string; label: string; optionsKey: keyof FilterOptions }[] = [
@@ -37,8 +35,6 @@ export function FilterBar({
   onFilterChange,
   onRescore,
   isRescoring,
-  groupBy,
-  onGroupByChange,
 }: FilterBarProps) {
   return (
     <div className="space-y-3">
@@ -84,21 +80,6 @@ export function FilterBar({
             "Re-score within filters"
           )}
         </Button>
-        <div className="flex items-center gap-2 ml-auto">
-          <span className="text-xs text-zinc-500">Group by:</span>
-          <Select
-            value={groupBy}
-            onValueChange={(v) => { if (v) onGroupByChange(v as GroupBy); }}
-          >
-            <SelectTrigger className="w-[160px] bg-zinc-900 border-zinc-700 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="creative_name">Creative Name</SelectItem>
-              <SelectItem value="concept">Concept</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
       </div>
     </div>
   );

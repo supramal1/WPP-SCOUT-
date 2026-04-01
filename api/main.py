@@ -27,5 +27,7 @@ def health():
 
 
 from routes.diagnostics import router as diag_router
+from routes.splits import router as splits_router
 
 app.include_router(diag_router, prefix="/api")
+app.include_router(splits_router, prefix="/api")

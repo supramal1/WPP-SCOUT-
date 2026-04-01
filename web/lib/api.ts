@@ -1,4 +1,4 @@
-import type { UploadResponse, RescoreResponse, ApiError, ActiveFilters } from "./types";
+import type { UploadResponse, RescoreResponse, ApiError, ActiveFilters, SplitRow } from "./types";
 import { parseExcel } from "./excel-strip";
 
 const API_BASE = "/api";
@@ -61,4 +61,19 @@ export async function rescore(
   }
 
   return res.json();
+}
+
+export async function fetchSplits(uploadId: string): Promise<SplitRow[]> {
+  const res = await fetch(`${API_BASE}/splits`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id: uploadId }),
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch splits");
+  }
+
+  const data: { splits: SplitRow[]; meta: { total_rows: number } } = await res.json();
+  return data.splits;
 }

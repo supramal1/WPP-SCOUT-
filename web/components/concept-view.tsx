@@ -60,7 +60,7 @@ export function ConceptView({ concepts, isLoading }: ConceptViewProps) {
                 <TableCell className="font-mono text-sm">{g.vtr_2s.toFixed(1)}%</TableCell>
                 <TableCell className="font-mono text-sm">{g.ctr.toFixed(3)}%</TableCell>
                 <TableCell className="font-mono text-sm">
-                  {"\u20AC"}{g.spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  {"\u00A3"}{g.spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </TableCell>
               </TableRow>
               {expandedConcept === g.concept &&
@@ -86,7 +86,7 @@ export function ConceptView({ concepts, isLoading }: ConceptViewProps) {
                       {c.ctr?.toFixed(3)}%
                     </TableCell>
                     <TableCell className="font-mono text-sm text-zinc-400">
-                      {"\u20AC"}{c.spend?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      {"\u00A3"}{c.spend?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </TableCell>
                   </TableRow>
                 ))}

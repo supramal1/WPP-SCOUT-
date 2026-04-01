@@ -152,7 +152,7 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
               <TableHead className="text-zinc-500">Creative</TableHead>
               <TableHead className="text-zinc-500">{leftValue} Score</TableHead>
               <TableHead className="text-zinc-500">{rightValue} Score</TableHead>
-              <TableHead className="text-zinc-500">Delta</TableHead>
+              <TableHead className="text-zinc-500">Score Difference</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

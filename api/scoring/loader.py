@@ -640,6 +640,9 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "campaign_raw": "first",
         "campaign_normalized": "first",
         "objective_normalized": "first",
+        "concept": "first",
+        "product": "first",
+        "wave": "first",
     }
 
     sum_cols = {

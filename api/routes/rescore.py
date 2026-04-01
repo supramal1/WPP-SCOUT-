@@ -60,12 +60,17 @@ async def rescore(request: Request):
         )
 
     if result is None:
-        print(f"[rescore] RETURNING 404 — sheets was {'truthy' if sheets else 'falsy'}")
+        sheets_info = "none"
+        if sheets is not None:
+            sheets_info = f"dict with {len(sheets)} keys: {list(sheets.keys())[:3]}"
+        print(
+            f"[rescore] RETURNING 404 — sheets_info={sheets_info} body_len={len(raw)}"
+        )
         raise HTTPException(
             status_code=404,
             detail={
                 "error": "upload_expired",
-                "message": "Session expired. Please re-upload your file.",
+                "message": f"Session expired. Please re-upload your file. [debug: sheets={sheets_info}, body={len(raw)}b]",
             },
         )
     print(f"[rescore] OK — {len(result.get('creatives', []))} creatives")

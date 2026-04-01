@@ -97,7 +97,14 @@ export async function rescore(
 
     if (retryRes.ok) return retryRes.json();
 
-    throw new Error(await parseErrorResponse(retryRes, "Rescore failed on retry"));
+    const retryErrText = await retryRes.text().catch(() => "no body");
+    console.log("[rescore] retry error body:", retryErrText.slice(0, 500));
+    try {
+      const parsed = JSON.parse(retryErrText);
+      throw new Error(parsed?.detail?.message || "Rescore failed on retry");
+    } catch {
+      throw new Error(`Rescore failed on retry (HTTP ${retryRes.status})`);
+    }
   }
 
   throw new Error(await parseErrorResponse(res, "Rescore failed"));

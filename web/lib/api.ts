@@ -59,40 +59,31 @@ export async function rescore(
   uploadId: string,
   filters: ActiveFilters
 ): Promise<RescoreResponse> {
-  const payload: Record<string, unknown> = { upload_id: uploadId, filters };
-
-  // Include cached sheets so the backend can re-hydrate if in-memory cache expired
-  const sheets = _cachedSheets;
-  if (sheets) {
-    payload.sheets = sheets;
-  }
-
-  const json = JSON.stringify(payload);
-
-  // Gzip when payload is large (sheets included)
-  const useGzip = json.length > 50_000;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let body: BodyInit;
-
-  if (useGzip) {
-    headers["Content-Encoding"] = "gzip";
-    body = await gzipString(json);
-  } else {
-    body = json;
-  }
-
+  // First attempt: without sheets (fast, small payload)
   const res = await fetch(`${API_BASE}/rescore`, {
     method: "POST",
-    headers,
-    body,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id: uploadId, filters }),
   });
 
-  if (!res.ok) {
-    const err: { detail: ApiError } = await res.json();
+  if (res.ok) return res.json();
+
+  // If cache expired (404) and we have sheets, retry with sheet data
+  if (res.status === 404 && _cachedSheets) {
+    const retryRes = await fetch(`${API_BASE}/rescore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets }),
+    });
+
+    if (retryRes.ok) return retryRes.json();
+
+    const err: { detail: ApiError } = await retryRes.json();
     throw new Error(err.detail?.message || "Rescore failed");
   }
 
-  return res.json();
+  const err: { detail: ApiError } = await res.json();
+  throw new Error(err.detail?.message || "Rescore failed");
 }
 
 export async function fetchSplits(uploadId: string): Promise<SplitRow[]> {

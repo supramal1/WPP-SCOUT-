@@ -136,7 +136,7 @@ export default function Dashboard() {
             />
 
             <Tabs defaultValue="rankings" className="space-y-4">
-              <TabsList className="bg-zinc-900 border border-zinc-800">
+              <TabsList className="bg-zinc-900 border border-zinc-800 w-full flex-wrap h-auto">
                 <TabsTrigger value="rankings">Rankings</TabsTrigger>
                 <TabsTrigger value="platform">Platform</TabsTrigger>
                 <TabsTrigger value="by-dimension">By Dimension</TabsTrigger>

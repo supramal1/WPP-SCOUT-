@@ -395,7 +395,10 @@ def score_raw_variants(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     # Audience consistency doesn't apply at variant level — neutral score
     df["audience_consistency"] = 1.0
-    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+    # Variant-level thresholds are lower than creative-level because budget/reach
+    # is split across OS, placement, audience segments. A creative with £5k total
+    # spend across 15 variants averages ~£333 per variant.
+    df["low_confidence"] = (df["spend"] < 100) | (df["reach"] < 2000)
 
     # Ensure buying_type exists (default to 'Paid' for backwards compatibility)
     if "buying_type" not in df.columns:

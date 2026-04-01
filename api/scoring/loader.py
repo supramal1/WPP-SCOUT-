@@ -531,7 +531,7 @@ def _load_sheet(
             .astype(str)
             .str.strip(),
             "platform": platform_series,
-            "currency": "EUR",
+            "currency": "GBP",
             "format_raw": format_raw,
             "format": format_normalized,
             "format_canonical": format_normalized,  # Alias for consistency

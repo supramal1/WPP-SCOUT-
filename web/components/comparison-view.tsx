@@ -50,6 +50,7 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
   const [rows, setRows] = useState<ComparisonRow[]>([]);
   const [comparedValues, setComparedValues] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const currentDef = DIMENSION_OPTIONS.find((d) => d.key === dimension)!;
   const options = filters[currentDef.optionsKey] ?? [];
@@ -65,6 +66,7 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
   const handleCompare = useCallback(async () => {
     if (options.length < 2) return;
     setIsLoading(true);
+    setError(null);
     try {
       const results = await Promise.all(
         options.map((val) => rescore(uploadId, { [dimension]: val }))
@@ -116,8 +118,8 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
 
       setComparedValues(options);
       setRows(compared);
-    } catch {
-      // Error handled silently — user sees empty table
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Comparison failed. Try re-uploading your data.");
     } finally {
       setIsLoading(false);
     }
@@ -153,6 +155,12 @@ export function ComparisonView({ uploadId, filters, groupBy }: ComparisonViewPro
           {isLoading ? "Comparing..." : "Compare"}
         </Button>
       </div>
+
+      {error && (
+        <div className="rounded-md bg-red-950/50 border border-red-900 p-3 text-sm text-red-300">
+          {error}
+        </div>
+      )}
 
       {rows.length > 0 && (
         <Table>

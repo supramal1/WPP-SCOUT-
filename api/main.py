@@ -24,3 +24,8 @@ app.include_router(rescore_router, prefix="/api")
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+from routes.diagnostics import router as diag_router
+
+app.include_router(diag_router, prefix="/api")

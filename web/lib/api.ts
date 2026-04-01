@@ -68,6 +68,8 @@ export async function rescore(
   uploadId: string,
   filters: ActiveFilters
 ): Promise<RescoreResponse> {
+  console.log("[rescore] start", { uploadId, filters, hasCachedSheets: !!_cachedSheets });
+
   // First attempt: without sheets (fast, small payload)
   const res = await fetch(`${API_BASE}/rescore`, {
     method: "POST",
@@ -75,12 +77,16 @@ export async function rescore(
     body: JSON.stringify({ upload_id: uploadId, filters }),
   });
 
+  console.log("[rescore] first attempt", res.status);
+
   if (res.ok) return res.json();
 
   // If cache expired (404) and we have sheets, retry with gzip-compressed sheet data
   if (res.status === 404 && _cachedSheets) {
+    console.log("[rescore] retrying with sheets (gzip)...");
     const retryJson = JSON.stringify({ upload_id: uploadId, filters, sheets: _cachedSheets });
     const compressed = await gzipString(retryJson);
+    console.log("[rescore] payload size", retryJson.length, "-> compressed", compressed.size);
 
     const retryRes = await fetch(`${API_BASE}/rescore`, {
       method: "POST",
@@ -90,6 +96,8 @@ export async function rescore(
       },
       body: compressed,
     });
+
+    console.log("[rescore] retry result", retryRes.status);
 
     if (retryRes.ok) return retryRes.json();
 

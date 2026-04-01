@@ -29,9 +29,12 @@ interface ComparisonViewProps {
 const DIMENSION_OPTIONS: { key: string; label: string; optionsKey: keyof FilterOptions }[] = [
   { key: "os", label: "OS", optionsKey: "os" },
   { key: "platform", label: "Platform", optionsKey: "platforms" },
-  { key: "asset_type", label: "Asset Type", optionsKey: "asset_types" },
+  { key: "asset_type", label: "Brand / Creator / Partner", optionsKey: "asset_types" },
   { key: "placement", label: "Placement", optionsKey: "placements" },
+  { key: "objective", label: "Objective", optionsKey: "objectives" },
   { key: "buying_type", label: "Buying Type", optionsKey: "buying_types" },
+  { key: "concept", label: "Concept", optionsKey: "concepts" },
+  { key: "format", label: "Format", optionsKey: "formats" },
 ];
 
 interface ComparisonRow {
@@ -51,7 +54,16 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   const currentDef = DIMENSION_OPTIONS.find((d) => d.key === dimension)!;
-  const options = filters[currentDef.optionsKey];
+  const options = filters[currentDef.optionsKey] ?? [];
+
+  const handleDimensionChange = useCallback((v: string | null) => {
+    if (v) {
+      setDimension(v);
+      setLeftValue("");
+      setRightValue("");
+      setRows([]);
+    }
+  }, []);
 
   const handleCompare = useCallback(async () => {
     if (!leftValue || !rightValue) return;
@@ -99,7 +111,7 @@ export function ComparisonView({ uploadId, filters }: ComparisonViewProps) {
       <div className="flex items-end gap-3">
         <div className="flex flex-col gap-1">
           <label className="text-xs text-zinc-500 uppercase">Dimension</label>
-          <Select value={dimension} onValueChange={(v) => { if (v) setDimension(v); }}>
+          <Select value={dimension} onValueChange={handleDimensionChange}>
             <SelectTrigger className="w-[140px] bg-zinc-900 border-zinc-700">
               <SelectValue />
             </SelectTrigger>

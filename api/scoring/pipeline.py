@@ -17,6 +17,7 @@ FILTER_COLUMN_MAP = {
     "objective": "objective",
     "format": "format_canonical",
     "asset_type": "asset_type_canonical",
+    "asset_subtype": "asset_type_subtype",
     "buying_type": "buying_type",
     "concept": "concept",
 }
@@ -46,6 +47,7 @@ def _df_to_creatives(df: pd.DataFrame) -> list[dict]:
         "placement",
         "os_target",
         "asset_type_canonical",
+        "asset_type_subtype",
         "buying_type",
         "campaign_normalized",
         "composite_score",
@@ -96,6 +98,7 @@ def _extract_filters(df: pd.DataFrame) -> dict:
         "objectives": _unique_sorted("objective"),
         "formats": _unique_sorted("format_canonical"),
         "asset_types": _unique_sorted("asset_type_canonical"),
+        "asset_subtypes": _unique_sorted("asset_type_subtype"),
         "buying_types": _unique_sorted("buying_type"),
         "concepts": _unique_sorted("concept"),
     }

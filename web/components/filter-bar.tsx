@@ -26,7 +26,9 @@ const FILTER_DEFS: { key: string; label: string; optionsKey: keyof FilterOptions
   { key: "objective", label: "Objective", optionsKey: "objectives" },
   { key: "format", label: "Format", optionsKey: "formats" },
   { key: "asset_type", label: "Asset Type", optionsKey: "asset_types" },
+  { key: "asset_subtype", label: "Brand / Creator / Partner", optionsKey: "asset_subtypes" },
   { key: "buying_type", label: "Buying Type", optionsKey: "buying_types" },
+  { key: "concept", label: "Concept", optionsKey: "concepts" },
 ];
 
 export function FilterBar({

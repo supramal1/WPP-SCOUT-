@@ -7,6 +7,7 @@ export interface Creative {
   placement: string;
   os_target: string;
   asset_type_canonical: string;
+  asset_type_subtype: string;
   buying_type: string;
   campaign_normalized: string;
   composite_score: number;
@@ -38,6 +39,7 @@ export interface FilterOptions {
   objectives: string[];
   formats: string[];
   asset_types: string[];
+  asset_subtypes: string[];
   buying_types: string[];
   concepts: string[];
 }

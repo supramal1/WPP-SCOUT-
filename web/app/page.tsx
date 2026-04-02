@@ -1,17 +1,18 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { UploadZone } from "@/components/upload-zone";
 import { GlobalFilterBar } from "@/components/global-filter-bar";
 import { CampaignTabs } from "@/components/campaign-tabs";
 import { uploadAndScore, rescore, fetchSplits } from "@/lib/api";
-import { applyFilters } from "@/lib/filters";
+import { applyFilters, aggregateByConcept } from "@/lib/filters";
 import type {
   Creative,
   FilterOptions,
   UploadMeta,
   ActiveFilters,
   SplitRow,
+  GroupBy,
 } from "@/lib/types";
 
 export default function Dashboard() {
@@ -25,6 +26,7 @@ export default function Dashboard() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [, setSplits] = useState<SplitRow[]>([]);
+  const [groupBy, setGroupBy] = useState<GroupBy>("creative_name");
 
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
@@ -79,11 +81,51 @@ export default function Dashboard() {
     setActiveFilters({});
     setSplits([]);
     setError(null);
+    setGroupBy("creative_name");
   }, []);
 
-  const displayedCreatives = filters
+  const filteredCreatives = filters
     ? applyFilters(allCreatives, activeFilters)
     : allCreatives;
+
+  const displayedCreatives = useMemo(() => {
+    if (groupBy === "concept") {
+      const concepts = aggregateByConcept(filteredCreatives);
+      return concepts.map((g): Creative => ({
+        creative_name: g.concept,
+        concept: g.concept,
+        platform: "",
+        objective: "",
+        format: "",
+        placement: "",
+        os_target: "",
+        asset_type_canonical: "",
+        asset_type_subtype: "",
+        buying_type: "",
+        campaign_normalized: "",
+        composite_score: g.composite_score,
+        tier: g.tier,
+        action: g.composite_score >= 70 ? "Scale Up" : g.composite_score >= 50 ? "Keep Running" : "Pause",
+        spend: g.spend,
+        reach: g.reach,
+        impressions: g.impressions,
+        vtr_2s: g.vtr_2s,
+        completion_rate: g.completion_rate,
+        ctr: g.ctr,
+        engagement_rate: g.engagement_rate,
+        share_rate: 0,
+        cpm: g.cpm,
+        frequency: g.frequency,
+        cost_per_complete_view: null,
+        reach_per_pound: null,
+        completion_vs_expected: null,
+        scoring_group: "",
+        explanation: `${g.n_variations} variations`,
+        low_confidence: false,
+      }));
+    }
+    return filteredCreatives;
+  }, [filteredCreatives, groupBy]);
 
   const hasData = allCreatives.length > 0 && filters && meta;
 
@@ -98,18 +140,43 @@ export default function Dashboard() {
             </h1>
             {meta && (
               <p className="text-[11px] text-[#5f6368] mt-0.5">
-                {meta.brand} &middot; {displayedCreatives.length} creatives
+                {meta.brand} &middot; {displayedCreatives.length}{" "}
+                {groupBy === "concept" ? "concepts" : "creatives"}
                 &middot; {meta.total_rows} rows
               </p>
             )}
           </div>
           {hasData && (
-            <button
-              onClick={handleReset}
-              className="text-xs text-[#5f6368] hover:text-[#202124] px-3 py-1.5 rounded-md hover:bg-[#f1f3f4] transition-colors"
-            >
-              New upload
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center rounded-full bg-[#f1f3f4] p-0.5">
+                <button
+                  onClick={() => setGroupBy("creative_name")}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    groupBy === "creative_name"
+                      ? "bg-white text-[#202124] shadow-sm"
+                      : "text-[#5f6368]"
+                  }`}
+                >
+                  Creative
+                </button>
+                <button
+                  onClick={() => setGroupBy("concept")}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    groupBy === "concept"
+                      ? "bg-white text-[#202124] shadow-sm"
+                      : "text-[#5f6368]"
+                  }`}
+                >
+                  Concept
+                </button>
+              </div>
+              <button
+                onClick={handleReset}
+                className="text-xs text-[#5f6368] hover:text-[#202124] px-3 py-1.5 rounded-md hover:bg-[#f1f3f4] transition-colors"
+              >
+                New upload
+              </button>
+            </div>
           )}
         </div>
       </header>

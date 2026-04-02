@@ -4,6 +4,7 @@ import React, { useState, useMemo } from "react";
 import type { Creative } from "@/lib/types";
 import { OverviewDashboard } from "./overview-dashboard";
 import { CreativeExplorer } from "./creative-explorer";
+import { ComparisonTable } from "./comparison-table";
 
 interface CampaignTabsProps {
   creatives: Creative[];
@@ -12,6 +13,7 @@ interface CampaignTabsProps {
 
 const SUB_TABS = [
   "Overview",
+  "Compare",
   "Asset Type",
   "OS",
   "Placement",
@@ -118,6 +120,8 @@ export function CampaignTabs({ creatives, isLoading }: CampaignTabsProps) {
       <div className="min-h-[200px]">
         {activeSubTab === "Overview" ? (
           <OverviewDashboard creatives={tabCreatives} />
+        ) : activeSubTab === "Compare" ? (
+          <ComparisonTable creatives={tabCreatives} />
         ) : (
           <CreativeExplorer
             creatives={tabCreatives}

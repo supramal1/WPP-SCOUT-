@@ -102,11 +102,14 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
   };
 
   const dimValues = useMemo(() => {
-    return [
-      ...new Set(creatives.map((c) => String(c[dim.field]))),
-    ]
-      .filter(Boolean)
-      .sort();
+    const vals = new Set(creatives.map((c) => String(c[dim.field])));
+    // Ensure Asset Type always shows Brand, Creator, Partner
+    if (dim.field === "asset_type_subtype") {
+      vals.add("Brand");
+      vals.add("Creator");
+      vals.add("Partner");
+    }
+    return [...vals].filter(Boolean).sort();
   }, [creatives, dim.field]);
 
   const rows = useMemo(() => {

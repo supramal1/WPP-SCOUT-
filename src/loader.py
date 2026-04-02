@@ -335,18 +335,23 @@ def normalize_asset_type_canonical(val) -> str:
 def extract_asset_subtype(val) -> str:
     """Extract granular subtype for filtering.
 
-    Returns: BAU, Partner, Influencer, UGC, or Other
+    Returns: Brand, Creator, Partner, or Other
     """
     v = str(val).strip().upper() if isinstance(val, str) and val else ""
 
-    if v in ("BAU", "", "N/A", "NA", "NONE", "STANDARD"):
-        return "BAU"
+    if v in ("BAU", "", "N/A", "NA", "NONE", "STANDARD", "BRAND"):
+        return "Brand"
     elif v in ("PARTNER", "HYBRID", "CO-BRANDED", "CO BRAND"):
         return "Partner"
-    elif v in ("INFLUENCER", "CREATOR", "TALENT"):
-        return "Influencer"
-    elif v in ("UGC", "USER GENERATED", "USER-GENERATED"):
-        return "UGC"
+    elif v in (
+        "INFLUENCER",
+        "CREATOR",
+        "TALENT",
+        "UGC",
+        "USER GENERATED",
+        "USER-GENERATED",
+    ):
+        return "Creator"
     return "Other"
 
 

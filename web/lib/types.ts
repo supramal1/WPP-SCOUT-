@@ -117,11 +117,11 @@ export interface ConceptGroup {
 }
 
 export const TIER_COLORS: Record<string, string> = {
-  "Top Performer": "#22c55e",
-  Strong: "#3b82f6",
-  Average: "#a1a1aa",
-  "Below Average": "#f97316",
-  Poor: "#ef4444",
+  "Top Performer": "#34a853",
+  Strong: "#1a73e8",
+  Average: "#9aa0a6",
+  "Below Average": "#f9ab00",
+  Poor: "#ea4335",
 };
 
 export function getTier(score: number): string {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
 
 interface UploadZoneProps {
   onUpload: (file: File) => void;
@@ -34,40 +33,43 @@ export function UploadZone({ onUpload, isLoading, loadingMessage }: UploadZonePr
 
   if (isLoading) {
     return (
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardContent className="flex flex-col items-center justify-center py-16">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-200" />
-          <p className="mt-4 text-sm text-zinc-400">{loadingMessage || "Processing..."}</p>
-        </CardContent>
-      </Card>
+      <div className="rounded-lg bg-[oklch(0.2_0.005_265)] border border-[oklch(1_0_0/8%)] flex flex-col items-center justify-center py-20">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#1a73e8]/30 border-t-[#1a73e8]" />
+        <p className="mt-4 text-sm text-[#9aa0a6]">{loadingMessage || "Processing..."}</p>
+      </div>
     );
   }
 
   return (
-    <Card
-      className={`bg-zinc-900 border-2 border-dashed transition-colors cursor-pointer ${
-        isDragging ? "border-zinc-400 bg-zinc-800" : "border-zinc-700 hover:border-zinc-500"
+    <div
+      className={`rounded-lg border-2 border-dashed transition-colors cursor-pointer py-20 flex flex-col items-center justify-center ${
+        isDragging
+          ? "border-[#1a73e8] bg-[#1a73e8]/5"
+          : "border-[oklch(1_0_0/15%)] bg-[oklch(0.18_0.005_265)] hover:border-[oklch(1_0_0/25%)]"
       }`}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={() => setIsDragging(false)}
       onDrop={handleDrop}
       onClick={() => document.getElementById("file-input")?.click()}
     >
-      <CardContent className="flex flex-col items-center justify-center py-16">
-        <p className="text-lg font-medium text-zinc-300">
-          Drop your campaign Excel file here
-        </p>
-        <p className="mt-2 text-sm text-zinc-500">
-          or click to browse (.xlsx)
-        </p>
-        <input
-          id="file-input"
-          type="file"
-          accept=".xlsx,.xls"
-          onChange={handleFileSelect}
-          className="hidden"
-        />
-      </CardContent>
-    </Card>
+      <div className="h-12 w-12 rounded-full bg-[#1a73e8]/10 flex items-center justify-center mb-4">
+        <svg className="h-6 w-6 text-[#8ab4f8]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+        </svg>
+      </div>
+      <p className="text-base font-medium text-[#e8eaed]">
+        Drop your campaign Excel file here
+      </p>
+      <p className="mt-1.5 text-sm text-[#9aa0a6]">
+        or click to browse (.xlsx)
+      </p>
+      <input
+        id="file-input"
+        type="file"
+        accept=".xlsx,.xls"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+    </div>
   );
 }

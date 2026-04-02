@@ -38,19 +38,27 @@ export function FilterBar({
   onRescore,
   isRescoring,
 }: FilterBarProps) {
+  const activeCount = Object.values(activeFilters).filter((v) => v && v !== "All").length;
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-3 items-center">
+    <div className="rounded-lg bg-[oklch(0.2_0.005_265)] border border-[oklch(1_0_0/8%)] p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-medium text-[#9aa0a6] uppercase tracking-wide">Filters</h3>
+        {activeCount > 0 && (
+          <span className="text-[11px] text-[#8ab4f8] font-medium">{activeCount} active</span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2.5">
         {FILTER_DEFS.map((def) => (
           <div key={def.key} className="flex flex-col gap-1">
-            <label className="text-xs text-zinc-500 uppercase tracking-wider">
+            <label className="text-[10px] text-[#9aa0a6] font-medium uppercase tracking-wider">
               {def.label}
             </label>
             <Select
               value={activeFilters[def.key] || "All"}
               onValueChange={(v) => onFilterChange(def.key, v ?? "All")}
             >
-              <SelectTrigger className="w-[140px] bg-zinc-900 border-zinc-700 text-sm">
+              <SelectTrigger className="w-[130px] h-8 bg-[oklch(0.16_0.005_265)] border-[oklch(1_0_0/10%)] text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -65,24 +73,21 @@ export function FilterBar({
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-4">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRescore}
-          disabled={isRescoring}
-          className="border-zinc-600"
-        >
-          {isRescoring ? (
-            <>
-              <span className="h-3 w-3 animate-spin rounded-full border border-zinc-400 border-t-transparent mr-2" />
-              Re-scoring...
-            </>
-          ) : (
-            "Re-score within filters"
-          )}
-        </Button>
-      </div>
+      <Button
+        size="sm"
+        onClick={onRescore}
+        disabled={isRescoring || activeCount === 0}
+        className="bg-[#1a73e8] hover:bg-[#1967d2] text-white text-xs font-medium h-8 px-4"
+      >
+        {isRescoring ? (
+          <>
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white mr-2" />
+            Re-scoring...
+          </>
+        ) : (
+          "Re-score"
+        )}
+      </Button>
     </div>
   );
 }

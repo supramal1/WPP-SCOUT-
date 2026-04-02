@@ -51,7 +51,6 @@ export default function Dashboard() {
       setFilters(result.filters);
       setMeta(result.meta);
       setActiveFilters({});
-      // Fetch raw splits in the background
       fetchSplits(result.upload_id)
         .then(setSplits)
         .catch(() => setSplits([]));
@@ -100,17 +99,38 @@ export default function Dashboard() {
   const hasData = allCreatives.length > 0 && filters && meta;
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
-      <div className="max-w-[1400px] mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            Creative Performance Analyzer
-          </h1>
-          <p className="text-sm text-zinc-500 mt-1">
-            Upload campaign data to score and rank creatives dynamically
-          </p>
+    <main className="min-h-screen bg-[oklch(0.14_0.005_265)] text-[#e8eaed]">
+      <header className="border-b border-[oklch(1_0_0/8%)] bg-[oklch(0.16_0.005_265)]">
+        <div className="max-w-[1440px] mx-auto px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold text-[#e8eaed] tracking-tight">
+              Creative Performance Analyzer
+            </h1>
+            <p className="text-xs text-[#9aa0a6] mt-0.5">
+              Upload campaign data to score and rank creatives
+            </p>
+          </div>
+          {hasData && (
+            <div className="flex items-center gap-1.5 bg-[oklch(0.2_0.005_265)] rounded-full p-0.5">
+              {(["creative_name", "concept"] as const).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGroupBy(g)}
+                  className={`px-3.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    groupBy === g
+                      ? "bg-[#1a73e8] text-white"
+                      : "text-[#9aa0a6] hover:text-[#e8eaed]"
+                  }`}
+                >
+                  {g === "creative_name" ? "Creative" : "Concept"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+      </header>
 
+      <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-5">
         {!hasData && (
           <UploadZone
             onUpload={handleUpload}
@@ -120,7 +140,7 @@ export default function Dashboard() {
         )}
 
         {error && (
-          <div className="rounded-md bg-red-950/50 border border-red-900 p-4 text-sm text-red-300">
+          <div className="rounded-lg bg-[#ea4335]/10 border border-[#ea4335]/30 p-3 text-sm text-[#f28b82]">
             {error}
           </div>
         )}
@@ -137,25 +157,8 @@ export default function Dashboard() {
               isRescoring={isRescoring}
             />
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500 uppercase tracking-wider mr-1">View by</span>
-              {(["creative_name", "concept"] as const).map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setGroupBy(g)}
-                  className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                    groupBy === g
-                      ? "bg-zinc-700 text-zinc-100"
-                      : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                  }`}
-                >
-                  {g === "creative_name" ? "Creative" : "Concept"}
-                </button>
-              ))}
-            </div>
-
             <Tabs defaultValue="rankings" className="space-y-4">
-              <TabsList className="w-full bg-zinc-900 border border-zinc-800 h-10">
+              <TabsList className="w-full bg-[oklch(0.2_0.005_265)] border border-[oklch(1_0_0/8%)] h-10">
                 <TabsTrigger value="rankings">Rankings</TabsTrigger>
                 <TabsTrigger value="platform">Platform</TabsTrigger>
                 <TabsTrigger value="by-dimension">By Dimension</TabsTrigger>
@@ -164,22 +167,24 @@ export default function Dashboard() {
               </TabsList>
 
               <TabsContent value="rankings">
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <div className="flex items-center gap-2">
-                    {BUYING_TYPE_FILTERS.map((bt) => (
-                      <button
-                        key={bt}
-                        onClick={() => setRankingsBuyingType(bt)}
-                        className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                          rankingsBuyingType === bt
-                            ? "bg-zinc-700 text-zinc-100"
-                            : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                        }`}
-                      >
-                        {bt}
-                      </button>
-                    ))}
-                    <span className="text-xs text-zinc-600 ml-2 font-mono">
+                    <div className="flex items-center gap-1 bg-[oklch(0.2_0.005_265)] rounded-lg p-0.5 border border-[oklch(1_0_0/8%)]">
+                      {BUYING_TYPE_FILTERS.map((bt) => (
+                        <button
+                          key={bt}
+                          onClick={() => setRankingsBuyingType(bt)}
+                          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                            rankingsBuyingType === bt
+                              ? "bg-[oklch(0.3_0.01_265)] text-[#e8eaed]"
+                              : "text-[#9aa0a6] hover:text-[#e8eaed]"
+                          }`}
+                        >
+                          {bt}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-[#9aa0a6] font-mono ml-1">
                       {rankingsCreatives.length} creatives
                       {groupBy === "concept" && ` / ${aggregateByConcept(rankingsCreatives).length} concepts`}
                     </span>

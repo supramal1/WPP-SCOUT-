@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import type { Creative } from "@/lib/types";
+import type { Creative, GroupBy } from "@/lib/types";
 import { TIER_COLORS, getTier } from "@/lib/types";
 
 interface ComparisonTableProps {
   creatives: Creative[];
+  groupBy?: GroupBy;
 }
 
 const DIMENSION_OPTIONS: { label: string; field: keyof Creative }[] = [
@@ -48,7 +49,7 @@ const METRICS: {
   },
 ];
 
-export function ComparisonTable({ creatives }: ComparisonTableProps) {
+export function ComparisonTable({ creatives, groupBy = "creative_name" }: ComparisonTableProps) {
   const [dimIndex, setDimIndex] = useState(0);
   const dim = DIMENSION_OPTIONS[dimIndex];
 
@@ -62,11 +63,13 @@ export function ComparisonTable({ creatives }: ComparisonTableProps) {
 
   const rows = useMemo(() => {
     const byName = new Map<string, Map<string, Creative[]>>();
+    const nameKey = groupBy === "concept" ? "concept" : "creative_name";
     for (const c of creatives) {
       const dv = String(c[dim.field]);
-      if (!byName.has(c.creative_name))
-        byName.set(c.creative_name, new Map());
-      const inner = byName.get(c.creative_name)!;
+      const rowKey = c[nameKey] || c.creative_name;
+      if (!byName.has(rowKey))
+        byName.set(rowKey, new Map());
+      const inner = byName.get(rowKey)!;
       if (!inner.has(dv)) inner.set(dv, []);
       inner.get(dv)!.push(c);
     }
@@ -171,7 +174,7 @@ export function ComparisonTable({ creatives }: ComparisonTableProps) {
             <thead>
               <tr className="bg-[#f8f9fa]">
                 <th className="text-left px-3 py-2 text-[#5f6368] font-medium sticky left-0 bg-[#f8f9fa] z-10 min-w-[200px]">
-                  Creative
+                  {groupBy === "concept" ? "Concept" : "Creative"}
                 </th>
                 {dimValues.map((dv) => (
                   <th
@@ -260,7 +263,7 @@ export function ComparisonTable({ creatives }: ComparisonTableProps) {
       </div>
 
       <p className="text-[11px] text-[#5f6368]">
-        {rows.length} creatives &middot; {dimValues.length}{" "}
+        {rows.length} {groupBy === "concept" ? "concepts" : "creatives"} &middot; {dimValues.length}{" "}
         {dim.label.toLowerCase()} values &middot; {METRICS.length} metrics
         each
       </p>

@@ -134,7 +134,7 @@ export function CampaignTabs({
             groupBy={groupBy}
           />
         ) : activeSubTab === "Compare" ? (
-          <ComparisonTable creatives={tabCreatives} />
+          <ComparisonTable creatives={tabCreatives} groupBy={groupBy} />
         ) : (
           <CreativeExplorer
             creatives={tabCreatives}

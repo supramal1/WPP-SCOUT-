@@ -60,7 +60,7 @@ export default function Dashboard() {
     try {
       const result = await rescore(uploadId, cleanFilters);
       setAllCreatives(result.creatives);
-      setFilters(result.filters);
+      // Don't overwrite filters — keep original dropdown options from upload
       setMeta(result.meta);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Rescore failed");

@@ -19,39 +19,87 @@ const DIMENSION_OPTIONS: { label: string; field: keyof Creative }[] = [
   { label: "Format", field: "format" },
 ];
 
-const METRICS: {
+const ALL_METRICS: {
   key: string;
   label: string;
   format: (v: number) => string;
+  aggregate: "spend-weighted" | "impression-weighted" | "sum" | "derived";
 }[] = [
-  { key: "composite_score", label: "Score", format: (v) => v.toFixed(1) },
-  {
-    key: "vtr_2s",
-    label: "VTR",
-    format: (v) => `${v.toFixed(1)}%`,
-  },
-  {
-    key: "completion_rate",
-    label: "Comp%",
-    format: (v) => `${v.toFixed(1)}%`,
-  },
-  {
-    key: "spend",
-    label: "Spend",
-    format: (v) =>
-      `\u00A3${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-  },
-  {
-    key: "reach",
-    label: "Reach",
-    format: (v) =>
-      v.toLocaleString(undefined, { maximumFractionDigits: 0 }),
-  },
+  { key: "composite_score", label: "Score", format: (v) => v.toFixed(1), aggregate: "spend-weighted" },
+  { key: "vtr_2s", label: "VTR", format: (v) => `${v.toFixed(1)}%`, aggregate: "impression-weighted" },
+  { key: "completion_rate", label: "Comp%", format: (v) => `${v.toFixed(1)}%`, aggregate: "impression-weighted" },
+  { key: "ctr", label: "CTR", format: (v) => `${v.toFixed(3)}%`, aggregate: "impression-weighted" },
+  { key: "engagement_rate", label: "Eng%", format: (v) => `${v.toFixed(2)}%`, aggregate: "impression-weighted" },
+  { key: "share_rate", label: "Share%", format: (v) => `${v.toFixed(2)}%`, aggregate: "impression-weighted" },
+  { key: "spend", label: "Spend", format: (v) => `\u00A3${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, aggregate: "sum" },
+  { key: "reach", label: "Reach", format: (v) => v.toLocaleString(undefined, { maximumFractionDigits: 0 }), aggregate: "sum" },
+  { key: "impressions", label: "Impr.", format: (v) => v.toLocaleString(undefined, { maximumFractionDigits: 0 }), aggregate: "sum" },
+  { key: "cpm", label: "CPM", format: (v) => `\u00A3${v.toFixed(2)}`, aggregate: "derived" },
+  { key: "frequency", label: "Freq", format: (v) => v.toFixed(2), aggregate: "derived" },
+  { key: "cost_per_complete_view", label: "CPCV", format: (v) => `\u00A3${v.toFixed(3)}`, aggregate: "spend-weighted" },
+  { key: "reach_per_pound", label: "Reach/\u00A3", format: (v) => v.toFixed(1), aggregate: "derived" },
+  { key: "completion_vs_expected", label: "Comp vs Exp", format: (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`, aggregate: "impression-weighted" },
 ];
+
+const DEFAULT_SELECTED = ["composite_score", "vtr_2s", "completion_rate", "spend", "reach"];
+
+function aggregateCell(items: Creative[]): Record<string, number> {
+  if (items.length === 0) return {};
+
+  const totalSpend = items.reduce((s, c) => s + c.spend, 0);
+  const totalImpressions = items.reduce((s, c) => s + c.impressions, 0);
+  const totalReach = items.reduce((s, c) => s + c.reach, 0);
+
+  const spendWeighted = (field: keyof Creative) =>
+    totalSpend > 0
+      ? items.reduce((s, c) => s + (c[field] as number ?? 0) * c.spend, 0) / totalSpend
+      : items.reduce((s, c) => s + (c[field] as number ?? 0), 0) / items.length;
+
+  const impressionWeighted = (field: keyof Creative) =>
+    totalImpressions > 0
+      ? items.reduce((s, c) => s + (c[field] as number ?? 0) * c.impressions, 0) / totalImpressions
+      : 0;
+
+  const totalCompletions = items.reduce(
+    (s, c) => s + (c.completion_rate * c.impressions) / 100,
+    0
+  );
+
+  return {
+    composite_score: Math.round(spendWeighted("composite_score") * 10) / 10,
+    vtr_2s: Math.round(impressionWeighted("vtr_2s") * 10) / 10,
+    completion_rate: Math.round(impressionWeighted("completion_rate") * 10) / 10,
+    ctr: totalImpressions > 0
+      ? Math.round(items.reduce((s, c) => s + (c.ctr * c.impressions) / 100, 0) / totalImpressions * 100 * 1000) / 1000
+      : 0,
+    engagement_rate: totalImpressions > 0
+      ? Math.round(items.reduce((s, c) => s + (c.engagement_rate * c.impressions) / 100, 0) / totalImpressions * 100 * 1000) / 1000
+      : 0,
+    share_rate: totalImpressions > 0
+      ? Math.round(items.reduce((s, c) => s + (c.share_rate * c.impressions) / 100, 0) / totalImpressions * 100 * 1000) / 1000
+      : 0,
+    spend: totalSpend,
+    reach: totalReach,
+    impressions: totalImpressions,
+    cpm: totalImpressions > 0 ? Math.round((totalSpend / totalImpressions) * 1000 * 100) / 100 : 0,
+    frequency: totalReach > 0 ? Math.round((totalImpressions / totalReach) * 100) / 100 : 0,
+    cost_per_complete_view: totalCompletions > 0 ? Math.round((totalSpend / totalCompletions) * 1000) / 1000 : 0,
+    reach_per_pound: totalSpend > 0 ? Math.round((totalReach / totalSpend) * 10) / 10 : 0,
+    completion_vs_expected: Math.round(impressionWeighted("completion_vs_expected") * 10) / 10,
+  };
+}
 
 export function ComparisonTable({ creatives, groupBy = "creative_name" }: ComparisonTableProps) {
   const [dimIndex, setDimIndex] = useState(0);
+  const [selectedMetrics, setSelectedMetrics] = useState<string[]>(DEFAULT_SELECTED);
   const dim = DIMENSION_OPTIONS[dimIndex];
+  const activeMetrics = ALL_METRICS.filter((m) => selectedMetrics.includes(m.key));
+
+  const toggleMetric = (key: string) => {
+    setSelectedMetrics((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
 
   const dimValues = useMemo(() => {
     return [
@@ -79,49 +127,7 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
         const cells: Record<string, Record<string, number>> = {};
         for (const dv of dimValues) {
           const items = dimMap.get(dv) || [];
-          const totalSpend = items.reduce((s, c) => s + c.spend, 0);
-          const totalImpressions = items.reduce(
-            (s, c) => s + c.impressions,
-            0
-          );
-
-          const weightedScore =
-            totalSpend > 0
-              ? items.reduce(
-                  (s, c) => s + c.composite_score * c.spend,
-                  0
-                ) / totalSpend
-              : items.length > 0
-                ? items.reduce(
-                    (s, c) => s + c.composite_score,
-                    0
-                  ) / items.length
-                : 0;
-
-          const weightedVtr =
-            totalImpressions > 0
-              ? items.reduce(
-                  (s, c) => s + c.vtr_2s * c.impressions,
-                  0
-                ) / totalImpressions
-              : 0;
-
-          const weightedCompletion =
-            totalImpressions > 0
-              ? items.reduce(
-                  (s, c) => s + c.completion_rate * c.impressions,
-                  0
-                ) / totalImpressions
-              : 0;
-
-          cells[dv] = {
-            composite_score: Math.round(weightedScore * 10) / 10,
-            vtr_2s: Math.round(weightedVtr * 10) / 10,
-            completion_rate:
-              Math.round(weightedCompletion * 10) / 10,
-            spend: totalSpend,
-            reach: items.reduce((s, c) => s + c.reach, 0),
-          };
+          cells[dv] = aggregateCell(items);
         }
 
         const scores = dimValues
@@ -135,7 +141,7 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
         return { name, cells, avgScore };
       })
       .sort((a, b) => b.avgScore - a.avgScore);
-  }, [creatives, dim.field, dimValues]);
+  }, [creatives, dim.field, dimValues, groupBy]);
 
   if (dimValues.length === 0) {
     return (
@@ -167,6 +173,24 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
         ))}
       </div>
 
+      {/* Metric toggle pills */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs text-[#5f6368] mr-1">Metrics</span>
+        {ALL_METRICS.map((m) => (
+          <button
+            key={m.key}
+            onClick={() => toggleMetric(m.key)}
+            className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+              selectedMetrics.includes(m.key)
+                ? "bg-[#e8f0fe] text-[#1a73e8]"
+                : "bg-[#f1f3f4] text-[#80868b] hover:bg-[#e8eaed]"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {/* Table */}
       <div className="rounded-lg border border-[#dadce0] bg-white overflow-hidden">
         <div className="overflow-x-auto">
@@ -179,7 +203,7 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
                 {dimValues.map((dv) => (
                   <th
                     key={dv}
-                    colSpan={METRICS.length}
+                    colSpan={activeMetrics.length}
                     className="text-center px-2 py-2 text-[#202124] font-medium border-l border-[#e8eaed]"
                   >
                     {dv}
@@ -189,7 +213,7 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
               <tr className="bg-[#f8f9fa] border-t border-[#e8eaed]">
                 <th className="sticky left-0 bg-[#f8f9fa] z-10" />
                 {dimValues.flatMap((dv) =>
-                  METRICS.map((m, mi) => (
+                  activeMetrics.map((m, mi) => (
                     <th
                       key={`${dv}-${m.key}`}
                       className={`text-right px-2 py-1.5 text-[10px] text-[#80868b] font-medium ${
@@ -214,12 +238,11 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
                     {row.name}
                   </td>
                   {dimValues.flatMap((dv) =>
-                    METRICS.map((m, mi) => {
+                    activeMetrics.map((m, mi) => {
                       const val = row.cells[dv]?.[m.key] ?? 0;
                       const isEmpty =
                         !row.cells[dv] ||
-                        (row.cells[dv].spend === 0 &&
-                          row.cells[dv].composite_score === 0);
+                        Object.keys(row.cells[dv]).length === 0;
                       if (isEmpty) {
                         return (
                           <td
@@ -264,8 +287,8 @@ export function ComparisonTable({ creatives, groupBy = "creative_name" }: Compar
 
       <p className="text-[11px] text-[#5f6368]">
         {rows.length} {groupBy === "concept" ? "concepts" : "creatives"} &middot; {dimValues.length}{" "}
-        {dim.label.toLowerCase()} values &middot; {METRICS.length} metrics
-        each
+        {dim.label.toLowerCase()} values &middot; {activeMetrics.length} metrics
+        selected
       </p>
     </div>
   );

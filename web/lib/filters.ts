@@ -9,6 +9,7 @@ const FILTER_TO_FIELD: Record<string, keyof Creative> = {
   objective: "objective",
   format: "format",
   asset_type: "asset_type_canonical",
+  asset_subtype: "asset_type_subtype",
   buying_type: "buying_type",
   concept: "concept",
 };

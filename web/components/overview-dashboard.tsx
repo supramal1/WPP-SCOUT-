@@ -1,0 +1,37 @@
+"use client";
+
+import type { Creative } from "@/lib/types";
+import { PanelComparison } from "./panel-comparison";
+import { PanelHeatmap } from "./panel-heatmap";
+
+interface OverviewDashboardProps {
+  creatives: Creative[];
+}
+
+export function OverviewDashboard({ creatives }: OverviewDashboardProps) {
+  if (creatives.length === 0) {
+    return (
+      <div className="rounded-lg border border-[#dadce0] bg-white p-8 text-center">
+        <p className="text-sm text-[#5f6368]">No creatives match the current filters.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PanelComparison
+          title="OS Comparison"
+          creatives={creatives}
+          dimensionField="os_target"
+        />
+        <PanelComparison
+          title="Asset Type"
+          creatives={creatives}
+          dimensionField="asset_type_subtype"
+        />
+      </div>
+      <PanelHeatmap creatives={creatives} />
+    </div>
+  );
+}

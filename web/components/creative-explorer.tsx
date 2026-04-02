@@ -9,7 +9,7 @@ interface CreativeExplorerProps {
   dimension: string;
 }
 
-const RANGE_OPTIONS = [5, 10, 20, 50] as const;
+const RANGE_OPTIONS = [10, 20, 50, 100] as const;
 
 const KPI_OPTIONS: { key: string; label: string }[] = [
   { key: "composite_score", label: "Score" },
@@ -49,13 +49,14 @@ export function CreativeExplorer({
   dimension,
 }: CreativeExplorerProps) {
   const [showTop, setShowTop] = useState(true);
-  const [range, setRange] = useState<number>(10);
+  const [range, setRange] = useState<number>(50);
   const [selectedKPIs, setSelectedKPIs] = useState<string[]>([
     "composite_score",
     "vtr_2s",
     "completion_rate",
     "ctr",
     "spend",
+    "reach",
   ]);
 
   const field = DIMENSION_FIELD[dimension];
@@ -136,7 +137,7 @@ export function CreativeExplorer({
             <button
               key={n}
               onClick={() => setRange(n)}
-              className={`h-7 min-w-[28px] px-1 rounded-full text-xs font-medium transition-colors ${
+              className={`h-7 min-w-[28px] px-1.5 rounded-full text-xs font-medium transition-colors ${
                 range === n
                   ? "bg-[#1a73e8] text-white"
                   : "bg-[#f1f3f4] text-[#5f6368] hover:bg-[#e8eaed]"
@@ -151,7 +152,7 @@ export function CreativeExplorer({
         <div className="h-5 w-px bg-[#dadce0]" />
 
         {/* KPI pills */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {KPI_OPTIONS.map((kpi) => (
             <button
               key={kpi.key}
@@ -168,99 +169,113 @@ export function CreativeExplorer({
         </div>
       </div>
 
-      {/* Tables per dimension value */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {groups.map((group) => (
-          <div
-            key={group.name}
-            className="rounded-lg border border-[#dadce0] bg-white overflow-hidden"
-          >
-            <div className="px-4 py-2.5 bg-[#f8f9fa] border-b border-[#e8eaed] flex items-center justify-between">
-              <h4 className="text-sm font-medium text-[#202124]">
-                {group.name}
-              </h4>
-              <span className="text-[11px] text-[#5f6368] font-mono">
-                {showTop ? "Top" : "Bottom"} {group.items.length} of{" "}
-                {group.total}
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-[#e8eaed]">
-                    <th className="text-left px-3 py-2 text-[#5f6368] font-medium w-8">
-                      #
-                    </th>
-                    <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
-                      Creative
-                    </th>
-                    {selectedKPIs.map((k) => (
-                      <th
-                        key={k}
-                        className="text-right px-3 py-2 text-[#5f6368] font-medium"
-                      >
-                        {KPI_OPTIONS.find((o) => o.key === k)?.label || k}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.items.map((c, i) => {
-                    const tier = getTier(c.composite_score);
-                    const isGood = c.composite_score >= 70;
-                    const isBad = c.composite_score < 25;
-                    return (
-                      <tr
-                        key={`${c.creative_name}-${i}`}
-                        className={`border-t border-[#f1f3f4] transition-colors ${
-                          isGood
-                            ? "bg-[#e6f4ea]/50"
-                            : isBad
-                              ? "bg-[#fce8e6]/50"
-                              : "hover:bg-[#f8f9fa]"
-                        }`}
-                      >
-                        <td className="px-3 py-2 font-mono text-[#80868b]">
-                          {i + 1}
-                        </td>
-                        <td className="px-3 py-2 font-medium text-[#202124] max-w-[220px] truncate">
-                          {c.creative_name}
-                        </td>
-                        {selectedKPIs.map((k) => (
-                          <td
-                            key={k}
-                            className="text-right px-3 py-2 font-mono text-[#202124]"
-                          >
-                            {k === "composite_score" ? (
-                              <span
-                                className="font-medium"
-                                style={{
-                                  color:
-                                    TIER_COLORS[tier] || "#9aa0a6",
-                                }}
-                              >
-                                {formatValue(
-                                  k,
-                                  c[k as keyof Creative] as number
-                                )}
-                              </span>
-                            ) : (
-                              formatValue(
-                                k,
-                                c[k as keyof Creative] as number
-                              )
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+      {/* One table per dimension value */}
+      {groups.map((group) => (
+        <div
+          key={group.name}
+          className="rounded-lg border border-[#dadce0] bg-white overflow-hidden"
+        >
+          <div className="px-4 py-2.5 bg-[#f8f9fa] border-b border-[#e8eaed] flex items-center justify-between">
+            <h4 className="text-sm font-medium text-[#202124]">
+              {group.name}
+            </h4>
+            <span className="text-[11px] text-[#5f6368] font-mono">
+              {showTop ? "Top" : "Bottom"} {group.items.length} of{" "}
+              {group.total}
+            </span>
           </div>
-        ))}
-      </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[#e8eaed]">
+                  <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
+                    {dimension}
+                  </th>
+                  <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
+                    Campaign
+                  </th>
+                  <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
+                    Creative
+                  </th>
+                  <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
+                    Platform
+                  </th>
+                  {selectedKPIs.map((k) => (
+                    <th
+                      key={k}
+                      className="text-right px-3 py-2 text-[#5f6368] font-medium"
+                    >
+                      {KPI_OPTIONS.find((o) => o.key === k)?.label || k}
+                    </th>
+                  ))}
+                  <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
+                    Tier
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.items.map((c, i) => {
+                  const tier = getTier(c.composite_score);
+                  const isGood = c.composite_score >= 70;
+                  const isBad = c.composite_score < 25;
+                  return (
+                    <tr
+                      key={`${c.creative_name}-${c.platform}-${i}`}
+                      className={`border-t border-[#f1f3f4] transition-colors ${
+                        isGood
+                          ? "bg-[#e6f4ea]/50"
+                          : isBad
+                            ? "bg-[#fce8e6]/50"
+                            : "hover:bg-[#f8f9fa]"
+                      }`}
+                    >
+                      <td className="px-3 py-2 text-[#5f6368]">
+                        {String(c[field!]) || "Unknown"}
+                      </td>
+                      <td className="px-3 py-2 text-[#5f6368] max-w-[180px] truncate">
+                        {c.campaign_normalized}
+                      </td>
+                      <td className="px-3 py-2 font-medium text-[#202124] max-w-[280px] truncate">
+                        {c.creative_name}
+                      </td>
+                      <td className="px-3 py-2 text-[#5f6368]">
+                        {c.platform}
+                      </td>
+                      {selectedKPIs.map((k) => (
+                        <td
+                          key={k}
+                          className="text-right px-3 py-2 font-mono text-[#202124]"
+                        >
+                          {k === "composite_score" ? (
+                            <span
+                              className="font-medium"
+                              style={{
+                                color: TIER_COLORS[tier] || "#9aa0a6",
+                              }}
+                            >
+                              {formatValue(k, c[k as keyof Creative] as number)}
+                            </span>
+                          ) : (
+                            formatValue(k, c[k as keyof Creative] as number)
+                          )}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2">
+                        <span
+                          className="text-[11px] font-medium"
+                          style={{ color: TIER_COLORS[tier] || "#9aa0a6" }}
+                        >
+                          {tier}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -88,43 +88,11 @@ export default function Dashboard() {
     ? applyFilters(allCreatives, activeFilters)
     : allCreatives;
 
-  const displayedCreatives = useMemo(() => {
+  const displayCount = useMemo(() => {
     if (groupBy === "concept") {
-      const concepts = aggregateByConcept(filteredCreatives);
-      return concepts.map((g): Creative => ({
-        creative_name: g.concept,
-        concept: g.concept,
-        platform: "",
-        objective: "",
-        format: "",
-        placement: "",
-        os_target: "",
-        asset_type_canonical: "",
-        asset_type_subtype: "",
-        buying_type: "",
-        campaign_normalized: "",
-        composite_score: g.composite_score,
-        tier: g.tier,
-        action: g.composite_score >= 70 ? "Scale Up" : g.composite_score >= 50 ? "Keep Running" : "Pause",
-        spend: g.spend,
-        reach: g.reach,
-        impressions: g.impressions,
-        vtr_2s: g.vtr_2s,
-        completion_rate: g.completion_rate,
-        ctr: g.ctr,
-        engagement_rate: g.engagement_rate,
-        share_rate: 0,
-        cpm: g.cpm,
-        frequency: g.frequency,
-        cost_per_complete_view: null,
-        reach_per_pound: null,
-        completion_vs_expected: null,
-        scoring_group: "",
-        explanation: `${g.n_variations} variations`,
-        low_confidence: false,
-      }));
+      return aggregateByConcept(filteredCreatives).length;
     }
-    return filteredCreatives;
+    return filteredCreatives.length;
   }, [filteredCreatives, groupBy]);
 
   const hasData = allCreatives.length > 0 && filters && meta;
@@ -140,7 +108,7 @@ export default function Dashboard() {
             </h1>
             {meta && (
               <p className="text-[11px] text-[#5f6368] mt-0.5">
-                {meta.brand} &middot; {displayedCreatives.length}{" "}
+                {meta.brand} &middot; {displayCount}{" "}
                 {groupBy === "concept" ? "concepts" : "creatives"}
                 &middot; {meta.total_rows} rows
               </p>
@@ -182,7 +150,6 @@ export default function Dashboard() {
       </header>
 
       <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-5">
-        {/* Upload zone */}
         {!hasData && (
           <UploadZone
             onUpload={handleUpload}
@@ -191,14 +158,12 @@ export default function Dashboard() {
           />
         )}
 
-        {/* Error */}
         {error && (
           <div className="rounded-lg bg-[#fce8e6] border border-[#f28b82] p-3 text-sm text-[#c5221f]">
             {error}
           </div>
         )}
 
-        {/* Dashboard */}
         {hasData && (
           <>
             <GlobalFilterBar
@@ -210,7 +175,9 @@ export default function Dashboard() {
             />
 
             <CampaignTabs
-              creatives={displayedCreatives}
+              creatives={filteredCreatives}
+              allCreatives={allCreatives}
+              groupBy={groupBy}
               isLoading={isRescoring}
             />
           </>

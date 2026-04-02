@@ -1,7 +1,10 @@
+import logging
 import pandas as pd
 import numpy as np
 import re
 import warnings
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -285,8 +288,45 @@ def normalize_placement(val: str, platform: str) -> str:
 
 # OS canonical mapping
 OS_MAPPINGS = {
-    "iOS": ["ios", "iphone", "apple", "ipad", "i-os", "io.s"],
-    "Android": ["android", "google", "samsung", "pixel", "droid", "andr oid"],
+    "iOS": [
+        "ios",
+        "iphone",
+        "apple",
+        "ipad",
+        "i-os",
+        "io.s",
+        "ipod",
+        "ipados",
+        "ipadOs",
+        "macos",
+        "mac os",
+    ],
+    "Android": [
+        "android",
+        "google",
+        "samsung",
+        "pixel",
+        "droid",
+        "andr oid",
+        "huawei",
+        "xiaomi",
+        "oppo",
+        "vivo",
+        "oneplus",
+        "realme",
+        "motorola",
+        "lg",
+        "sony",
+        "nokia",
+        "honor",
+        "zte",
+        "redmi",
+        "poco",
+        "nothing",
+        "google pixel",
+        "samsung galaxy",
+        "galaxy",
+    ],
     "Desktop": [
         "desktop",
         "pc",
@@ -296,6 +336,17 @@ OS_MAPPINGS = {
         "laptop",
         "web",
         "browser",
+        "chromebook",
+        "linux",
+        "ubuntu",
+        "chrome os",
+        "chromeos",
+        "win",
+        "win10",
+        "win11",
+        "macos",
+        "osx",
+        "os x",
     ],
     "Other": ["other", "unknown", "na", "n/a", "none", ""],
 }
@@ -318,18 +369,66 @@ def normalize_os(val) -> str:
             return canonical
         # Partial match for compound values
         for var in variations:
-            if var in v:
+            if var and var in v:
                 return canonical
 
-    return "Other"
+    logger.warning("Unrecognized OS value falling through to 'All': %r", val)
+    return "All"
 
 
 def normalize_asset_type_canonical(val) -> str:
     """Map to canonical: Brand or Creator."""
     v = str(val).strip().upper() if isinstance(val, str) and val else ""
-    if v in ("BAU", "BRAND", "N/A", "NA", "NONE", "", "STANDARD"):
+    if v in (
+        "BAU",
+        "BRAND",
+        "N/A",
+        "NA",
+        "NONE",
+        "",
+        "STANDARD",
+        "BRANDED",
+        "BRAND CONTENT",
+        "BRAND ASSET",
+        "BRAND VIDEO",
+        "BRAND CREATIVE",
+        "ORIGINAL",
+        "IN-HOUSE",
+        "INHOUSE",
+        "IN HOUSE",
+        "OWNED",
+        "DIRECT",
+        "INTERNAL",
+        "STUDIO",
+        "AGENCY",
+        "STATIC",
+        "VIDEO",
+        "MOTION",
+        "ANIMATION",
+        "PRODUCT",
+        "HERO",
+        "MASTER",
+        "NAN",
+        "PARTNER",
+        "HYBRID",
+        "CO-BRANDED",
+        "CO BRAND",
+        "CO-BRAND",
+        "COBRAND",
+        "COBRANDED",
+        "COLLAB",
+        "COLLABORATION",
+        "PARTNERSHIP",
+        "AFFILIATE",
+        "SPONSORED",
+        "SPONSOR",
+    ):
         return "Brand"
-    return "Creator"
+    # Creator-like values
+    v_lower = v.lower()
+    if any(kw in v_lower for kw in ("creator", "influencer", "ugc", "talent", "kol")):
+        return "Creator"
+    return "Brand"
 
 
 def extract_asset_subtype(val) -> str:
@@ -339,9 +438,62 @@ def extract_asset_subtype(val) -> str:
     """
     v = str(val).strip().upper() if isinstance(val, str) and val else ""
 
-    if v in ("BAU", "", "N/A", "NA", "NONE", "STANDARD", "BRAND"):
+    if v in (
+        "BAU",
+        "",
+        "N/A",
+        "NA",
+        "NONE",
+        "STANDARD",
+        "BRAND",
+        "BRANDED",
+        "BRAND CONTENT",
+        "BRAND ASSET",
+        "BRAND VIDEO",
+        "BRAND CREATIVE",
+        "ORIGINAL",
+        "IN-HOUSE",
+        "INHOUSE",
+        "IN HOUSE",
+        "OWNED",
+        "DIRECT",
+        "INTERNAL",
+        "STUDIO",
+        "AGENCY",
+        "STATIC",
+        "VIDEO",
+        "MOTION",
+        "ANIMATION",
+        "PRODUCT",
+        "HERO",
+        "MASTER",
+        "NAN",
+    ):
         return "Brand"
-    elif v in ("PARTNER", "HYBRID", "CO-BRANDED", "CO BRAND"):
+    elif v in (
+        "PARTNER",
+        "HYBRID",
+        "CO-BRANDED",
+        "CO BRAND",
+        "CO-BRAND",
+        "COBRAND",
+        "COBRANDED",
+        "COLLAB",
+        "COLLABORATION",
+        "PARTNERSHIP",
+        "AFFILIATE",
+        "SPONSORED",
+        "SPONSOR",
+        "JOINT",
+        "JOINT VENTURE",
+        "LICENSED",
+        "LICENSE",
+        "SYNDICATED",
+        "SYNDICATION",
+        "WHITE LABEL",
+        "WHITELABEL",
+        "WHITE-LABEL",
+    ):
         return "Partner"
     elif v in (
         "INFLUENCER",
@@ -350,9 +502,39 @@ def extract_asset_subtype(val) -> str:
         "UGC",
         "USER GENERATED",
         "USER-GENERATED",
+        "USER_GENERATED",
+        "USERGENERATED",
+        "KOL",
+        "KEY OPINION LEADER",
+        "AMBASSADOR",
+        "BRAND AMBASSADOR",
+        "ADVOCATE",
+        "TESTIMONIAL",
+        "REVIEW",
+        "ENDORSEMENT",
+        "CREATOR CONTENT",
+        "CREATOR ASSET",
+        "INFLUENCER CONTENT",
+        "TALENT CONTENT",
+        "COMMUNITY",
+        "FAN",
+        "FAN CONTENT",
+        "EARNED",
+        "ORGANIC CREATOR",
     ):
         return "Creator"
-    return "Other"
+
+    # Partial matching for compound values
+    v_lower = v.lower()
+    if any(kw in v_lower for kw in ("creator", "influencer", "ugc", "talent", "kol")):
+        return "Creator"
+    if any(kw in v_lower for kw in ("partner", "collab", "co-brand", "hybrid")):
+        return "Partner"
+    if any(kw in v_lower for kw in ("brand", "bau", "standard", "in-house", "studio")):
+        return "Brand"
+
+    logger.warning("Unrecognized asset subtype falling through to 'Brand': %r", val)
+    return "Brand"
 
 
 def normalize_objective(obj) -> str:
@@ -596,8 +778,15 @@ def _load_sheet(
             ),  # Canonical alias
             "device_type": _pick_col(df, ["OS"], "All")
             .apply(normalize_os)
-            .map({"iOS": "Mobile", "Android": "Mobile", "Desktop": "Desktop"})
-            .fillna("Other"),
+            .map(
+                {
+                    "iOS": "Mobile",
+                    "Android": "Mobile",
+                    "Desktop": "Desktop",
+                    "All": "All",
+                }
+            )
+            .fillna("All"),
             "audience_segment": _pick_col(df, ["Targeting Segment"], "All")
             .astype(str)
             .str.strip()

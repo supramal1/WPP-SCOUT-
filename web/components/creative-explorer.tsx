@@ -1,12 +1,59 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import type { Creative } from "@/lib/types";
+import type { Creative, GroupBy } from "@/lib/types";
 import { TIER_COLORS, getTier } from "@/lib/types";
 
 interface CreativeExplorerProps {
   creatives: Creative[];
   dimension: string;
+  groupBy?: GroupBy;
+}
+
+/** Aggregate creatives by concept, returning synthetic Creative objects with weighted metrics. */
+function collapseByConceptLocal(items: Creative[]): Creative[] {
+  const map = new Map<string, Creative[]>();
+  for (const c of items) {
+    const key = c.concept || c.creative_name;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(c);
+  }
+
+  return Array.from(map.entries()).map(([concept, cs]) => {
+    const totalSpend = cs.reduce((s, c) => s + c.spend, 0);
+    const totalImpressions = cs.reduce((s, c) => s + c.impressions, 0);
+    const totalReach = cs.reduce((s, c) => s + c.reach, 0);
+    const totalClicks = cs.reduce((s, c) => s + (c.ctr * c.impressions) / 100, 0);
+    const totalEngagements = cs.reduce((s, c) => s + (c.engagement_rate * c.impressions) / 100, 0);
+    const totalCompletions = cs.reduce((s, c) => s + (c.completion_rate * c.impressions) / 100, 0);
+
+    const weightedScore =
+      totalSpend > 0
+        ? cs.reduce((s, c) => s + c.composite_score * c.spend, 0) / totalSpend
+        : cs.reduce((s, c) => s + c.composite_score, 0) / cs.length;
+    const weightedVtr =
+      totalImpressions > 0
+        ? cs.reduce((s, c) => s + c.vtr_2s * c.impressions, 0) / totalImpressions
+        : 0;
+
+    return {
+      ...cs[0],
+      creative_name: concept,
+      concept,
+      platform: `${cs.length} variation${cs.length === 1 ? "" : "s"}`,
+      composite_score: Math.round(weightedScore * 10) / 10,
+      tier: getTier(weightedScore),
+      spend: totalSpend,
+      reach: totalReach,
+      impressions: totalImpressions,
+      vtr_2s: Math.round(weightedVtr * 10) / 10,
+      ctr: totalImpressions > 0 ? Math.round((totalClicks / totalImpressions) * 100 * 1000) / 1000 : 0,
+      engagement_rate: totalImpressions > 0 ? Math.round((totalEngagements / totalImpressions) * 100 * 1000) / 1000 : 0,
+      completion_rate: totalImpressions > 0 ? Math.round((totalCompletions / totalImpressions) * 100 * 100) / 100 : 0,
+      cpm: totalImpressions > 0 ? Math.round((totalSpend / totalImpressions) * 1000 * 100) / 100 : 0,
+      frequency: totalReach > 0 ? Math.round((totalImpressions / totalReach) * 100) / 100 : 0,
+    } as Creative;
+  });
 }
 
 const RANGE_OPTIONS = [10, 20, 50, 100] as const;
@@ -47,7 +94,9 @@ function formatValue(key: string, value: number | null | undefined): string {
 export function CreativeExplorer({
   creatives,
   dimension,
+  groupBy = "creative_name",
 }: CreativeExplorerProps) {
+  const isConcept = groupBy === "concept";
   const [showTop, setShowTop] = useState(true);
   const [range, setRange] = useState<number>(50);
   const [selectedKPIs, setSelectedKPIs] = useState<string[]>([
@@ -70,19 +119,22 @@ export function CreativeExplorer({
       map.get(key)!.push(c);
     }
     return Array.from(map.entries())
-      .map(([name, items]) => ({
-        name,
-        items: items
-          .sort((a, b) =>
-            showTop
-              ? b.composite_score - a.composite_score
-              : a.composite_score - b.composite_score
-          )
-          .slice(0, range),
-        total: items.length,
-      }))
+      .map(([name, items]) => {
+        const displayItems = isConcept ? collapseByConceptLocal(items) : items;
+        return {
+          name,
+          items: displayItems
+            .sort((a, b) =>
+              showTop
+                ? b.composite_score - a.composite_score
+                : a.composite_score - b.composite_score
+            )
+            .slice(0, range),
+          total: displayItems.length,
+        };
+      })
       .sort((a, b) => b.total - a.total);
-  }, [creatives, field, showTop, range]);
+  }, [creatives, field, showTop, range, isConcept]);
 
   const toggleKPI = (key: string) => {
     setSelectedKPIs((prev) =>
@@ -195,7 +247,7 @@ export function CreativeExplorer({
                     Campaign
                   </th>
                   <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
-                    Creative
+                    {isConcept ? "Concept" : "Creative"}
                   </th>
                   <th className="text-left px-3 py-2 text-[#5f6368] font-medium">
                     Platform

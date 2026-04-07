@@ -139,6 +139,7 @@ export function CampaignTabs({
           <CreativeExplorer
             creatives={tabCreatives}
             dimension={activeSubTab}
+            groupBy={groupBy}
           />
         )}
       </div>

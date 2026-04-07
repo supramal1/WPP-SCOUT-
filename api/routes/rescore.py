@@ -10,11 +10,15 @@ router = APIRouter()
 @router.post("/rescore")
 async def rescore(request: Request):
     raw = await request.body()
+    print(
+        f"[rescore] received {len(raw)} bytes, content-encoding={request.headers.get('content-encoding', 'none')}"
+    )
 
     encoding = request.headers.get("content-encoding", "")
     if encoding == "gzip":
         try:
             raw = gzip.decompress(raw)
+            print(f"[rescore] decompressed to {len(raw)} bytes")
         except Exception:
             raise HTTPException(
                 status_code=400,
@@ -39,6 +43,11 @@ async def rescore(request: Request):
             detail={"error": "missing_field", "message": "upload_id is required"},
         )
 
+    has_sheets = sheets is not None
+    print(
+        f"[rescore] upload_id={upload_id}, filters={filters}, has_sheets={has_sheets}"
+    )
+
     try:
         result = process_rescore(upload_id, filters, sheets)
     except Exception as e:
@@ -52,6 +61,7 @@ async def rescore(request: Request):
         )
 
     if result is None:
+        print(f"[rescore] cache miss for upload_id={upload_id}, no sheets provided")
         raise HTTPException(
             status_code=404,
             detail={
@@ -59,4 +69,6 @@ async def rescore(request: Request):
                 "message": "Session expired. Please re-upload your file.",
             },
         )
+
+    print(f"[rescore] success: {len(result.get('creatives', []))} creatives")
     return result

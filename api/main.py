@@ -1,5 +1,8 @@
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+_start = time.time()
 
 app = FastAPI(title="Creative Analyzer API", version="1.0.0")
 
@@ -23,7 +26,8 @@ app.include_router(rescore_router, prefix="/api")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    uptime = round(time.time() - _start, 1)
+    return {"status": "ok", "uptime_s": uptime}
 
 
 from routes.diagnostics import router as diag_router

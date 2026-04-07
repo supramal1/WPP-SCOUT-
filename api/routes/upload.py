@@ -1,5 +1,6 @@
 import gzip
 import json
+import traceback
 from fastapi import APIRouter, Request, HTTPException
 from scoring.pipeline import process_upload_json
 
@@ -10,12 +11,16 @@ router = APIRouter()
 async def upload_and_score(request: Request):
     """Accept pre-parsed sheet data as JSON (optionally gzip-compressed)."""
     raw = await request.body()
+    print(
+        f"[upload-and-score] received {len(raw)} bytes, content-encoding={request.headers.get('content-encoding', 'none')}"
+    )
 
     # Decompress if gzipped
     encoding = request.headers.get("content-encoding", "")
     if encoding == "gzip":
         try:
             raw = gzip.decompress(raw)
+            print(f"[upload-and-score] decompressed to {len(raw)} bytes")
         except Exception:
             raise HTTPException(
                 status_code=400,
@@ -37,8 +42,15 @@ async def upload_and_score(request: Request):
             detail={"error": "no_sheets", "message": "No sheet data provided"},
         )
 
+    print(
+        f"[upload-and-score] processing {len(sheets)} sheet(s): {list(sheets.keys())}"
+    )
+
     try:
         result = process_upload_json(sheets)
+        print(
+            f"[upload-and-score] success: {len(result.get('creatives', []))} creatives scored"
+        )
         return result
     except KeyError as e:
         raise HTTPException(
@@ -58,4 +70,13 @@ async def upload_and_score(request: Request):
         raise HTTPException(
             status_code=400,
             detail={"error": "empty_data", "message": error_msg},
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "scoring_error",
+                "message": f"Scoring failed: {type(e).__name__}: {e}",
+            },
         )

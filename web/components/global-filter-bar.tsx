@@ -20,8 +20,13 @@ interface GlobalFilterBarProps {
 const GLOBAL_FILTERS: { key: string; label: string; optionsKey: keyof FilterOptions }[] = [
   { key: "campaign", label: "Campaign", optionsKey: "campaigns" },
   { key: "platform", label: "Platform", optionsKey: "platforms" },
+  { key: "buying_type", label: "Buying Type", optionsKey: "buying_types" },
   { key: "format", label: "Format", optionsKey: "formats" },
   { key: "concept", label: "Concept", optionsKey: "concepts" },
+  { key: "asset_type", label: "Asset Type", optionsKey: "asset_types" },
+  { key: "os", label: "OS", optionsKey: "os" },
+  { key: "placement", label: "Placement", optionsKey: "placements" },
+  { key: "objective", label: "Objective", optionsKey: "objectives" },
 ];
 
 export function GlobalFilterBar({

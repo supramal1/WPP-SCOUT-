@@ -38,7 +38,7 @@ export default function Dashboard() {
       setAllCreatives(result.creatives);
       setFilters(result.filters);
       setMeta(result.meta);
-      setActiveFilters({});
+      setActiveFilters({ buying_type: "Paid" });
       fetchSplits(result.upload_id)
         .then(setSplits)
         .catch(() => setSplits([]));
@@ -78,7 +78,7 @@ export default function Dashboard() {
     setAllCreatives([]);
     setFilters(null);
     setMeta(null);
-    setActiveFilters({});
+    setActiveFilters({ buying_type: "Paid" });
     setSplits([]);
     setError(null);
     setGroupBy("creative_name");

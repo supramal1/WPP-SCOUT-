@@ -86,7 +86,16 @@ TIKTOK_PLACEMENT_MAPPINGS = {
         "for you page",
         "tiktok feed",
     ],
-    "Top Feed": ["top feed", "topview", "top view", "top of feed"],
+    "Top Feed": ["top feed", "top of feed", "topfeed"],
+    "Top Feed Takeover": [
+        "top feed takeover",
+        "top feed take over",
+        "topfeed takeover",
+        "tft",
+        "brand takeover",
+        "takeover",
+    ],
+    "TopView": ["topview", "top view", "top-view"],
     "Spark Ads": ["spark ads", "spark", "creator ads", "spark ad"],
     "Hashtag Challenge": [
         "hashtag challenge",
@@ -263,7 +272,15 @@ def normalize_placement(val: str, platform: str) -> str:
             if v in variations:
                 return canonical
 
-    # Partial matching for common patterns
+    # Partial matching for common patterns.
+    # TikTok top-of-app placements are checked before the generic "feed"
+    # branch so "top feed takeover" / "top view" don't collapse into In Feed.
+    if "takeover" in v or "take over" in v:
+        return "Top Feed Takeover"
+    if "topview" in v or "top view" in v:
+        return "TopView"
+    if platform == "TikTok" and "top" in v and "feed" in v:
+        return "Top Feed"
     if "reel" in v:
         return "Reels"
     if "story" in v or "storie" in v:
@@ -280,8 +297,6 @@ def normalize_placement(val: str, platform: str) -> str:
         return "Spark Ads"
     if "hashtag" in v or "challenge" in v:
         return "Hashtag Challenge"
-    if "top" in v and ("feed" in v or "view" in v):
-        return "Top Feed"
 
     return "Unknown"
 

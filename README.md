@@ -1,5 +1,20 @@
 # WPP SCOUT
 
+```text
+                  .-=================================================-.
+              .--'                                                   '--.
+ __        ______  ____    ____   ____ ___  _   _ _____                 |
+ \ \      / /  _ \|  _ \  / ___| / ___/ _ \| | | |_   _|                |
+  \ \ /\ / /| |_) | |_) | \___ \| |  | | | | | | | | |                  |
+   \ V  V / |  __/|  __/   ___) | |__| |_| | |_| | | |                  |
+    \_/\_/  |_|   |_|     |____/ \____\___/ \___/  |_|                  |
+              '--.                                                   .--'
+                  '-====[ campaign signal intelligence over MCP ]====-'
+
+        raw exports >>> map >>> QA >>> score >>> explain >>> recommend
+                  placement truth + concept rollups + action plans
+```
+
 WPP Scout is an MCP-first backend for analyzing paid social creative performance. It ingests Meta and TikTok campaign exports, maps them into a canonical schema, scores creatives against objective-specific KPIs, and exposes the analysis through MCP tools for an agent to query.
 
 The intended user experience is: a non-technical user asks a chat agent a campaign-performance question, and the agent calls WPP Scout MCP tools to ingest data, inspect quality, rank creatives, compare concepts, explain performance, and recommend action.

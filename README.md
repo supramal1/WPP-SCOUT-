@@ -1,4 +1,4 @@
-# Creative Performance Analyzer
+# WPP SCOUT
 
 Automated tool for scoring and ranking social media creatives based on the evaluation methodology used by the social team at EssenceMediacom. Built for Google Pixel campaign data across TikTok and Meta.
 

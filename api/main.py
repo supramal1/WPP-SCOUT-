@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 _start = time.time()
 
-app = FastAPI(title="Creative Analyzer API", version="1.0.0")
+app = FastAPI(title="WPP Scout API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,9 +19,11 @@ app.add_middleware(
 # Use absolute imports for Vercel compatibility (relative imports fail in serverless)
 from routes.upload import router as upload_router
 from routes.rescore import router as rescore_router
+from routes.mapping import router as mapping_router
 
 app.include_router(upload_router, prefix="/api")
 app.include_router(rescore_router, prefix="/api")
+app.include_router(mapping_router, prefix="/api")
 
 
 @app.get("/api/health")

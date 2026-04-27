@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WPP Scout Executive One-Pager</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8dee8;
+      --paper: #ffffff;
+      --wash: #f6f8fb;
+      --navy: #1e2d4f;
+      --blue: #2f6fed;
+      --green: #0f8a6a;
+      --amber: #b7791f;
+      --red: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #e8edf5;
+      color: var(--ink);
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      line-height: 1.28;
+    }
+
+    .page {
+      width: 297mm;
+      min-height: 210mm;
+      margin: 0 auto;
+      padding: 14mm;
+      background: var(--paper);
+      display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      gap: 15px;
+    }
+
+    header {
+      border-bottom: 2px solid var(--navy);
+      padding-bottom: 12px;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 880px;
+      color: var(--navy);
+      font-size: 36px;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 860px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    h2 {
+      margin: 0;
+      color: var(--navy);
+      font-size: 18px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+
+    .section-note {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .journey {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--wash);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .step {
+      position: relative;
+      min-height: 132px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+    }
+
+    .step:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      top: 55px;
+      right: -10px;
+      width: 18px;
+      text-align: center;
+      color: var(--muted);
+      background: var(--wash);
+      font-weight: 900;
+    }
+
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      margin-bottom: 12px;
+      border-radius: 8px;
+      background: #eaf1ff;
+      color: var(--blue);
+      font-weight: 900;
+      font-size: 16px;
+    }
+
+    .step:nth-child(2) .num {
+      background: #ecfdf3;
+      color: var(--green);
+    }
+
+    .step:nth-child(3) .num {
+      background: #fff7ed;
+      color: var(--amber);
+    }
+
+    .step:nth-child(4) .num {
+      background: #fef3f2;
+      color: var(--red);
+    }
+
+    .step h3 {
+      margin-bottom: 6px;
+      font-size: 16px;
+      color: var(--navy);
+    }
+
+    .step p {
+      font-size: 12px;
+    }
+
+    .complexity-wrap {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--paper);
+    }
+
+    .underhood {
+      display: grid;
+      grid-template-columns: 1fr 1.05fr 1fr;
+      gap: 10px;
+    }
+
+    .under-card {
+      min-height: 148px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fbfcff;
+    }
+
+    .under-card h3 {
+      margin-bottom: 7px;
+      color: var(--navy);
+      font-size: 15px;
+    }
+
+    .under-card p {
+      margin-bottom: 9px;
+      font-size: 11px;
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+    }
+
+    .input-pill {
+      min-height: 38px;
+      padding: 7px;
+      border: 1px solid #d9e3ff;
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .input-pill b {
+      display: block;
+      color: var(--ink);
+      font-size: 10px;
+      margin-bottom: 1px;
+    }
+
+    .weight-bar {
+      display: grid;
+      grid-template-columns: 50fr 25fr 15fr 10fr;
+      height: 54px;
+      overflow: hidden;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: white;
+      margin: 8px 0;
+    }
+
+    .weight-segment {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      color: #fff;
+      text-align: center;
+      padding: 5px;
+      border-right: 1px solid rgba(255,255,255,0.35);
+    }
+
+    .weight-segment:last-child {
+      border-right: 0;
+    }
+
+    .weight-segment b {
+      display: block;
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .weight-segment span {
+      display: block;
+      margin-top: 3px;
+      font-size: 9px;
+      color: rgba(255,255,255,0.9);
+    }
+
+    .w-primary {
+      background: var(--blue);
+    }
+
+    .w-secondary {
+      background: var(--green);
+    }
+
+    .w-cost {
+      background: var(--amber);
+    }
+
+    .w-attention {
+      background: var(--red);
+    }
+
+    .guard-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .guard {
+      display: grid;
+      grid-template-columns: 8px 1fr;
+      gap: 7px;
+      align-items: start;
+      padding: 6px;
+      border-radius: 8px;
+      background: white;
+      border: 1px solid #edf0f5;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .guard::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      margin-top: 3px;
+    }
+
+    .guard:nth-child(2)::before {
+      background: var(--green);
+    }
+
+    .guard:nth-child(3)::before {
+      background: var(--amber);
+    }
+
+    .guard:nth-child(4)::before {
+      background: var(--red);
+    }
+
+    .bottom {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--paper);
+    }
+
+    .score-band {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .score {
+      min-height: 74px;
+      padding: 10px 8px;
+      border-radius: 9px;
+      color: #fff;
+    }
+
+    .score b {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .score span {
+      display: block;
+      color: rgba(255,255,255,0.9);
+      font-size: 10px;
+    }
+
+    .s1 {
+      background: var(--green);
+    }
+
+    .s2 {
+      background: #39966b;
+    }
+
+    .s3 {
+      background: #7a8798;
+    }
+
+    .s4 {
+      background: var(--amber);
+    }
+
+    .s5 {
+      background: var(--red);
+    }
+
+    .outputs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .output {
+      min-height: 74px;
+      padding: 10px;
+      border: 1px solid #cdeedd;
+      border-radius: 9px;
+      background: #f0fdf7;
+    }
+
+    .output b {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--green);
+      font-size: 12px;
+    }
+
+    .output span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .takeaway {
+      border: 1px solid #c8d7ff;
+      border-radius: 12px;
+      padding: 13px 14px;
+      background: #f2f6ff;
+    }
+
+    .takeaway b {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--navy);
+      font-size: 17px;
+    }
+
+    .takeaway p {
+      font-size: 13px;
+    }
+
+    @page {
+      size: A4 landscape;
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        margin: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="eyebrow">WPP Scout scoring approach</div>
+      <h1>From messy campaign data to confident creative decisions</h1>
+      <div class="subtitle">
+        WPP Scout gives teams a consistent way to understand which creative ideas are working, where they are working, and what action to take next.
+      </div>
+    </header>
+
+    <section class="journey">
+      <div class="section-head">
+        <h2>The visible journey</h2>
+        <div class="section-note">What a stakeholder needs to understand first</div>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <h3>Ingest the data</h3>
+          <p>Bring together Meta and TikTok campaign exports, even when the files arrive in different shapes.</p>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <h3>Compare fairly</h3>
+          <p>Judge each creative against the right peer group, not against unlike-for-like media buys.</p>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <h3>Apply guardrails</h3>
+          <p>Check confidence, fatigue, consistency, objective fit, and cost before recommending action.</p>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <h3>Recommend action</h3>
+          <p>Translate performance into clear next steps: scale, keep, refresh, review, or pause.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="complexity-wrap">
+      <div class="section-head">
+        <h2>The hidden complexity</h2>
+        <div class="section-note">What is fed in, how it is weighted, and what protects the recommendation</div>
+      </div>
+      <div class="underhood">
+        <div class="under-card">
+          <h3>What's fed in</h3>
+          <p>The score uses performance metrics and campaign context, not creative opinion alone.</p>
+          <div class="input-grid">
+            <div class="input-pill"><b>Media delivery</b>Spend, reach, impressions, frequency</div>
+            <div class="input-pill"><b>Response</b>Clicks, CTR, engagement, shares</div>
+            <div class="input-pill"><b>Attention</b>2s/3s VTR, completions, hold signals</div>
+            <div class="input-pill"><b>Context</b>Objective, platform, buying type, format</div>
+            <div class="input-pill"><b>Creative labels</b>Concept, placement, asset type, wave</div>
+            <div class="input-pill"><b>Quality flags</b>Confidence, fatigue, consistency</div>
+          </div>
+        </div>
+
+        <div class="under-card">
+          <h3>How the score is weighted</h3>
+          <p>The exact KPIs change by objective, but the weighting logic stays consistent.</p>
+          <div class="weight-bar" aria-label="Scoring weights">
+            <div class="weight-segment w-primary"><b>50%</b><span>Primary KPI</span></div>
+            <div class="weight-segment w-secondary"><b>25%</b><span>Secondary</span></div>
+            <div class="weight-segment w-cost"><b>15%</b><span>Efficiency</span></div>
+            <div class="weight-segment w-attention"><b>10%</b><span>Attention</span></div>
+          </div>
+          <p>Example: Awareness leans into attention and efficient reach; Traffic leans into CTR. Static assets use engagement and CTR instead of video completion.</p>
+        </div>
+
+        <div class="under-card">
+          <h3>Guardrails behind the answer</h3>
+          <div class="guard-list">
+            <div class="guard">Only compare like with like: objective, platform, buying type, and format.</div>
+            <div class="guard">Flag low-spend or low-reach rows before calling them winners.</div>
+            <div class="guard">Reduce confidence where frequency suggests audience fatigue.</div>
+            <div class="guard">Show concept-level and placement-level views separately.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="bottom">
+      <div class="panel">
+        <div class="section-head">
+          <h2>The action language</h2>
+          <div class="section-note">A score becomes a decision prompt</div>
+        </div>
+        <div class="score-band">
+          <div class="score s1"><b>85+</b><span>Top performer</span></div>
+          <div class="score s2"><b>70-84</b><span>Scale or use as template</span></div>
+          <div class="score s3"><b>50-69</b><span>Keep or monitor</span></div>
+          <div class="score s4"><b>25-49</b><span>Review or refresh</span></div>
+          <div class="score s5"><b>&lt;25</b><span>Pause candidate</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="section-head">
+          <h2>What teams get back</h2>
+        </div>
+        <div class="outputs">
+          <div class="output"><b>Rankings</b><span>Top and bottom creatives by platform, objective, or concept.</span></div>
+          <div class="output"><b>Reasons</b><span>Plain-English explanations for each recommendation.</span></div>
+          <div class="output"><b>Budget signals</b><span>Where to scale, reduce, refresh, or gather more evidence.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="takeaway">
+      <b>The point is not to automate judgement.</b>
+      <p>WPP Scout hides the analytical complexity without hiding the reasoning. Stakeholders get a simple action; teams can still trace the evidence behind it.</p>
+    </section>
+  </main>
+</body>
+</html>

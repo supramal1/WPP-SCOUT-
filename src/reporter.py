@@ -403,7 +403,7 @@ def export_excel(
 
         # --- TITLE ---
         row = 1
-        dash_title = f"Creative Performance Dashboard{f' — {brand}' if brand else ''}"
+        dash_title = f"WPP Scout Dashboard{f' — {brand}' if brand else ''}"
         ws.merge_range(row, 1, row, 8, dash_title, title_fmt)
         row += 1
         ws.merge_range(
@@ -4021,7 +4021,7 @@ def _rebuild_dashboard_with_openpyxl(
     )
 
     dashboard.merge_cells("B2:G2")
-    dashboard["B2"] = f"Creative Performance Dashboard{f' — {brand}' if brand else ''}"
+    dashboard["B2"] = f"WPP Scout Dashboard{f' — {brand}' if brand else ''}"
     dashboard["B2"].fill = title_fill
     dashboard["B2"].font = Font(color="FFFFFF", bold=True, size=18)
     dashboard["B2"].alignment = Alignment(horizontal="left")

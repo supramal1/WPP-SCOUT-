@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Creative Performance Analyzer - Google Pixel Campaign Analysis
+"""WPP Scout - Google Pixel Campaign Analysis
 
 Scores social media creatives based on objective-aligned metrics,
 spend significance, and frequency fatigue. Produces ranked output

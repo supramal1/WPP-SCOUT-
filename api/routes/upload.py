@@ -42,12 +42,12 @@ async def upload_and_score(request: Request):
             detail={"error": "no_sheets", "message": "No sheet data provided"},
         )
 
-    print(
-        f"[upload-and-score] processing {len(sheets)} sheet(s): {list(sheets.keys())}"
-    )
+    column_mapping = payload.get("column_mapping")
+
+    print(f"[upload-and-score] processing {len(sheets)} sheet(s): {list(sheets.keys())}")
 
     try:
-        result = process_upload_json(sheets)
+        result = process_upload_json(sheets, column_mapping=column_mapping)
         print(
             f"[upload-and-score] success: {len(result.get('creatives', []))} creatives scored"
         )

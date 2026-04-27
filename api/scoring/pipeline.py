@@ -143,9 +143,11 @@ def process_upload(filepath: str) -> dict:
     }
 
 
-def process_upload_json(sheets: dict[str, list[list]]) -> dict:
+def process_upload_json(
+    sheets: dict[str, list[list]], column_mapping: dict[str, str] | None = None
+) -> dict:
     """Upload pipeline from pre-parsed JSON sheet data (no file needed)."""
-    df_raw, _ = load_data_from_sheets(sheets)
+    df_raw, _ = load_data_from_sheets(sheets, column_mapping=column_mapping)
     upload_id = upload_cache.store(df_raw)
     scored = _score_and_enrich(df_raw)
     creatives = _df_to_creatives(scored)
@@ -172,7 +174,7 @@ def process_rescore(
     """Rescore with filters: retrieve cached df_raw -> filter -> score -> serialize.
 
     If the in-memory cache has expired (common on serverless), falls back to
-    re-loading from sheets data sent by the frontend.
+    re-loading from sheets data sent by the caller.
     """
     df_raw = upload_cache.get(upload_id)
     if df_raw is None and sheets:

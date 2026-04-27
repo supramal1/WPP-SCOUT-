@@ -1,4 +1,7 @@
 import logging
+from pathlib import Path
+from typing import Optional
+
 import pandas as pd
 import numpy as np
 import re
@@ -644,7 +647,11 @@ def compute_attention_proxy_inputs(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_sheet(
-    xl: pd.ExcelFile, sheet_name: str, platform_default: str, buying_type: str
+    xl: pd.ExcelFile,
+    sheet_name: str,
+    platform_default: str,
+    buying_type: str,
+    header: int = 2,
 ) -> pd.DataFrame:
     """Load one 'Data Analysis' sheet and normalise to internal schema.
 
@@ -657,7 +664,7 @@ def _load_sheet(
     - '2s VTR' (TikTok) or '3s VTR' (Meta) — both mapped to vtr_2s internally
     - No Wooshi brand measurement columns
     """
-    df = pd.read_excel(xl, sheet_name=sheet_name, header=2)
+    df = pd.read_excel(xl, sheet_name=sheet_name, header=header)
 
     # Normalise column names: strip whitespace and collapse embedded newlines
     df.columns = [
@@ -849,6 +856,9 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "campaign_raw": "first",
         "campaign_normalized": "first",
         "objective_normalized": "first",
+        "concept": "first",
+        "product": "first",
+        "wave": "first",
     }
 
     sum_cols = {
@@ -993,7 +1003,149 @@ def compute_audience_consistency(
     return df_agg
 
 
-def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def normalize_unstructured_dataframe(
+    df_sheet: pd.DataFrame, column_mapping: dict[str, str]
+) -> pd.DataFrame:
+    """Normalize a mapped non-standard export into WPP Scout's internal schema."""
+    mapped_df = df_sheet.rename(columns=column_mapping)
+
+    def get_col(candidates, default):
+        return _pick_col(mapped_df, candidates, default)
+
+    platform_series = get_col(["platform"], "Unknown").apply(
+        lambda x: normalize_platform(str(x))
+    )
+    format_raw = get_col(["format_raw"], "Unknown").astype(str)
+    format_normalized = format_raw.apply(normalize_format)
+    placement_raw = get_col(["placement_raw"], "Unknown").astype(str)
+    placement_normalized = pd.Series(
+        [
+            normalize_placement(placement, platform)
+            for placement, platform in zip(placement_raw, platform_series)
+        ],
+        index=mapped_df.index,
+    )
+
+    vtr_raw = _normalize_pct(
+        pd.to_numeric(get_col(["vtr_2s"], 0), errors="coerce").fillna(0)
+    )
+    asset_type_raw = get_col(["asset_type_raw"], "BAU").astype(str)
+
+    normalized = pd.DataFrame(
+        {
+            "ad_name_raw": get_col(["ad_name_raw"], "").astype(str),
+            "ad_id": get_col(["ad_id"], "").astype(str),
+            "creative_name": get_col(["creative_name"], "")
+            .astype(str)
+            .replace("", "Unknown Creative")
+            .replace("nan", "Unknown Creative"),
+            "platform": platform_series,
+            "currency": "EUR",
+            "format_raw": format_raw,
+            "format": format_normalized,
+            "format_canonical": format_normalized,
+            "placement_raw": placement_raw,
+            "placement": placement_normalized,
+            "placement_canonical": placement_normalized,
+            "campaign_name": get_col(["campaign_raw"], "").astype(str),
+            "campaign_raw": get_col(["campaign_raw"], "").astype(str),
+            "campaign_normalized": get_col(["campaign_raw"], "")
+            .astype(str)
+            .apply(
+                lambda x: str(x).strip()
+                if pd.notna(x) and str(x).strip()
+                else "Unknown"
+            ),
+            "objective": get_col(["objective"], "Unknown").apply(
+                lambda x: normalize_objective(str(x))
+            ),
+            "objective_normalized": get_col(["objective"], "Unknown").apply(
+                lambda x: normalize_objective(str(x))
+            ),
+            "buying_type": get_col(["buying_type"], "Paid")
+            .astype(str)
+            .replace("nan", "Paid")
+            .replace("", "Paid"),
+            "reach": pd.to_numeric(get_col(["reach"], 0), errors="coerce").fillna(0),
+            "impressions": pd.to_numeric(
+                get_col(["impressions"], 0), errors="coerce"
+            ).fillna(0),
+            "frequency": pd.to_numeric(
+                get_col(["frequency"], 0), errors="coerce"
+            ).fillna(0),
+            "spend": pd.to_numeric(get_col(["spend"], 0), errors="coerce").fillna(0),
+            "cpm": pd.to_numeric(get_col(["cpm"], 0), errors="coerce").fillna(0),
+            "clicks": pd.to_numeric(get_col(["clicks"], 0), errors="coerce").fillna(0),
+            "vtr_2s": vtr_raw,
+            "video_views_100": pd.to_numeric(
+                get_col(["video_views_100"], 0), errors="coerce"
+            ).fillna(0),
+            "shares": pd.to_numeric(get_col(["shares"], 0), errors="coerce").fillna(0),
+            "engagements": pd.to_numeric(
+                get_col(["engagements"], 0), errors="coerce"
+            ).fillna(0),
+            "duration_s": get_col(["duration_s"], "").apply(parse_duration),
+            "ad_status": "Active",
+            "total_plays": pd.to_numeric(
+                get_col(["total_plays"], 0), errors="coerce"
+            ).fillna(0),
+            "asset_type_raw": asset_type_raw,
+            "asset_type_canonical": asset_type_raw.apply(normalize_asset_type_canonical),
+            "asset_type_subtype": asset_type_raw.apply(extract_asset_subtype),
+            "os_target": get_col(["os_target"], "All").apply(normalize_os),
+            "os_canonical": get_col(["os_target"], "All").apply(normalize_os),
+            "device_type": get_col(["os_target"], "All")
+            .apply(normalize_os)
+            .map(
+                {
+                    "iOS": "Mobile",
+                    "Android": "Mobile",
+                    "Desktop": "Desktop",
+                    "All": "All",
+                }
+            )
+            .fillna("All"),
+            "audience_segment": get_col(["audience_segment"], "All")
+            .astype(str)
+            .str.strip()
+            .replace({"": "All", "nan": "All", "None": "All"}),
+            "concept": get_col(["concept"], "").astype(str),
+            "product": get_col(["product"], "").astype(str),
+            "wave": get_col(["wave"], "").astype(str),
+        }
+    )
+
+    normalized = normalized[normalized["creative_name"] != "Unknown Creative"]
+    normalized = normalized[(normalized["spend"] > 0) | (normalized["impressions"] > 0)]
+    return normalized
+
+
+def _load_unstructured_frames(
+    candidates: list[tuple[str, pd.DataFrame]],
+    column_mapping: Optional[dict[str, str]] = None,
+) -> list[pd.DataFrame]:
+    frames = []
+    if column_mapping is None:
+        try:
+            from src.llm_mapper import generate_column_mapping
+        except ImportError:
+            raise ValueError(
+                "llm_mapper module not found. Cannot process unstructured data."
+            )
+
+    for _, df_sheet in candidates:
+        if df_sheet.empty or len(df_sheet.columns) < 3:
+            continue
+        mapping = column_mapping or generate_column_mapping(df_sheet)
+        normalized = normalize_unstructured_dataframe(df_sheet, mapping)
+        if not normalized.empty:
+            frames.append(normalized)
+    return frames
+
+
+def load_data(
+    filepath: str, column_mapping: Optional[dict[str, str]] = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load Excel file and return (df_raw, df_agg).
 
     Reads four 'Data Analysis' sheets from the Pixel DE format:
@@ -1012,8 +1164,8 @@ def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     df_raw — one row per ad line, split dimensions intact.
     df_agg — one row per creative concept (name + platform + objective + buying_type + format).
     """
-    xl = pd.ExcelFile(filepath)
-
+    frames = []
+    path = Path(filepath)
     sheet_configs = [
         ("Data Analysis Paid Meta", "Meta", "Paid"),
         ("Data Analysis Paid TikTok", "TikTok", "Paid"),
@@ -1021,90 +1173,31 @@ def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         ("Data Analysis Boosting TikTok", "TikTok", "Boosting"),
     ]
 
-    frames = []
-    for sheet_name, platform_default, buying_type in sheet_configs:
-        if sheet_name in xl.sheet_names:
-            frames.append(_load_sheet(xl, sheet_name, platform_default, buying_type))
+    if path.suffix.lower() == ".csv":
+        frames.extend(
+            _load_unstructured_frames(
+                [(path.stem, pd.read_csv(filepath))], column_mapping=column_mapping
+            )
+        )
+    else:
+        xl = pd.ExcelFile(filepath)
 
-    if not frames:
-        logger.info(f"No standard sheets found in {filepath}. Attempting LLM mapping...")
-        try:
-            from src.llm_mapper import apply_llm_mapping
-        except ImportError:
-            raise ValueError("llm_mapper module not found. Cannot process unstructured data.")
-        
-        for sheet_name in xl.sheet_names:
-            if any(skip in sheet_name.lower() for skip in ["methodology", "summary", "looker", "rankings"]):
-                continue
-            
-            # Try reading the sheet normally (header on row 0)
-            df_sheet = pd.read_excel(xl, sheet_name=sheet_name)
-            if df_sheet.empty or len(df_sheet.columns) < 3:
-                continue
-                
-            mapped_df = apply_llm_mapping(df_sheet)
-            
-            def get_col(candidates, default):
-                return _pick_col(mapped_df, candidates, default)
-                
-            platform_series = get_col(["platform"], "Unknown").apply(lambda x: normalize_platform(str(x)))
-            format_raw = get_col(["format_raw"], "Unknown").astype(str)
-            format_normalized = format_raw.apply(normalize_format)
-            placement_raw = get_col(["placement_raw"], "Unknown").astype(str)
-            placement_normalized = pd.Series([normalize_placement(p, plat) for p, plat in zip(placement_raw, platform_series)], index=mapped_df.index)
-            
-            vtr_raw = _normalize_pct(pd.to_numeric(get_col(["vtr_2s"], 0), errors="coerce").fillna(0))
-            asset_type_raw = get_col(["asset_type_raw"], "BAU").astype(str)
-            
-            normalized = pd.DataFrame({
-                "ad_name_raw": get_col(["ad_name_raw"], "").astype(str),
-                "ad_id": get_col(["ad_id"], "").astype(str),
-                "creative_name": get_col(["creative_name"], "").astype(str).replace("", "Unknown Creative").replace("nan", "Unknown Creative"),
-                "platform": platform_series,
-                "currency": "EUR",
-                "format_raw": format_raw,
-                "format": format_normalized,
-                "format_canonical": format_normalized,
-                "placement_raw": placement_raw,
-                "placement": placement_normalized,
-                "placement_canonical": placement_normalized,
-                "campaign_name": get_col(["campaign_raw"], "").astype(str),
-                "campaign_raw": get_col(["campaign_raw"], "").astype(str),
-                "campaign_normalized": get_col(["campaign_raw"], "").astype(str).apply(lambda x: str(x).strip() if pd.notna(x) and str(x).strip() else "Unknown"),
-                "objective": get_col(["objective"], "Unknown").apply(lambda x: normalize_objective(str(x))),
-                "objective_normalized": get_col(["objective"], "Unknown").apply(lambda x: normalize_objective(str(x))),
-                "buying_type": get_col(["buying_type"], "Paid").astype(str).replace("nan", "Paid").replace("", "Paid"),
-                "reach": pd.to_numeric(get_col(["reach"], 0), errors="coerce").fillna(0),
-                "impressions": pd.to_numeric(get_col(["impressions"], 0), errors="coerce").fillna(0),
-                "frequency": pd.to_numeric(get_col(["frequency"], 0), errors="coerce").fillna(0),
-                "spend": pd.to_numeric(get_col(["spend"], 0), errors="coerce").fillna(0),
-                "cpm": pd.to_numeric(get_col(["cpm"], 0), errors="coerce").fillna(0),
-                "clicks": pd.to_numeric(get_col(["clicks"], 0), errors="coerce").fillna(0),
-                "vtr_2s": vtr_raw,
-                "video_views_100": pd.to_numeric(get_col(["video_views_100"], 0), errors="coerce").fillna(0),
-                "shares": pd.to_numeric(get_col(["shares"], 0), errors="coerce").fillna(0),
-                "engagements": pd.to_numeric(get_col(["engagements"], 0), errors="coerce").fillna(0),
-                "duration_s": get_col(["duration_s"], "").apply(parse_duration),
-                "ad_status": "Active",
-                "total_plays": pd.to_numeric(get_col(["total_plays"], 0), errors="coerce").fillna(0),
-                "asset_type_raw": asset_type_raw,
-                "asset_type_canonical": asset_type_raw.apply(normalize_asset_type_canonical),
-                "asset_type_subtype": asset_type_raw.apply(extract_asset_subtype),
-                "os_target": get_col(["os_target"], "All").apply(normalize_os),
-                "os_canonical": get_col(["os_target"], "All").apply(normalize_os),
-                "device_type": get_col(["os_target"], "All").apply(normalize_os).map({"iOS": "Mobile", "Android": "Mobile", "Desktop": "Desktop", "All": "All"}).fillna("All"),
-                "audience_segment": get_col(["audience_segment"], "All").astype(str).str.strip().replace({"": "All", "nan": "All", "None": "All"}),
-                "concept": "",
-                "product": "",
-                "wave": "",
-            })
-            
-            # Drop empty rows and rows without a spend or impressions
-            normalized = normalized[normalized["creative_name"] != "Unknown Creative"]
-            normalized = normalized[(normalized["spend"] > 0) | (normalized["impressions"] > 0)]
-            
-            if not normalized.empty:
-                frames.append(normalized)
+        for sheet_name, platform_default, buying_type in sheet_configs:
+            if sheet_name in xl.sheet_names:
+                frames.append(_load_sheet(xl, sheet_name, platform_default, buying_type))
+
+        if not frames:
+            logger.info(
+                "No standard sheets found in %s. Attempting mapping workflow...",
+                filepath,
+            )
+            from src.data_mapping import iter_candidate_dataframes
+
+            frames.extend(
+                _load_unstructured_frames(
+                    iter_candidate_dataframes(filepath), column_mapping=column_mapping
+                )
+            )
 
     if not frames:
         raise ValueError(
@@ -1159,3 +1252,105 @@ def load_data(filepath: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["cross_platform"] = df["platforms_active"].str.contains(",", na=False)
 
     return df_raw, df
+
+
+def _load_sheet_from_rows(
+    rows: list[list], sheet_name: str, platform_default: str, buying_type: str
+) -> pd.DataFrame:
+    """Load a standard Pixel sheet from parsed JSON rows."""
+    if len(rows) < 4:
+        return pd.DataFrame()
+
+    import io
+
+    headers = [
+        str(c).strip().replace("\n", " ") if c is not None else "" for c in rows[2]
+    ]
+    data_rows = rows[3:]
+    n_cols = len(headers)
+    padded = [(list(row) + [None] * (n_cols - len(row)))[:n_cols] for row in data_rows]
+
+    df = pd.DataFrame(padded, columns=headers)
+    buf = io.BytesIO()
+    df.to_excel(buf, sheet_name=sheet_name, index=False, engine="openpyxl")
+    buf.seek(0)
+    xl = pd.ExcelFile(buf, engine="openpyxl")
+    return _load_sheet(xl, sheet_name, platform_default, buying_type, header=0)
+
+
+def _finish_loaded_frames(frames: list[pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run common post-processing after standard or mapped frames are loaded."""
+    if not frames:
+        raise ValueError("No matching sheets found and mapping failed to extract valid data.")
+
+    df_raw = pd.concat(frames, ignore_index=True)
+
+    imp_raw = df_raw["impressions"].replace(0, float("nan"))
+    df_raw["completion_rate"] = (df_raw["video_views_100"] / imp_raw) * 100
+    df_raw["ctr"] = (df_raw["clicks"] / imp_raw) * 100
+    df_raw["engagement_rate"] = (df_raw["engagements"] / imp_raw) * 100
+
+    df_raw = compute_canonical_metrics(df_raw)
+    df_raw = compute_attention_proxy_inputs(df_raw)
+
+    df = aggregate_creatives(df_raw)
+
+    imp = df["impressions"].replace(0, float("nan"))
+    df["completion_rate"] = (df["video_views_100"] / imp) * 100
+    df["ctr"] = (df["clicks"] / imp) * 100
+    df["engagement_rate"] = (df["engagements"] / imp) * 100
+    df["share_rate"] = (df["shares"] / imp) * 100
+    df["cost_per_complete_view"] = df["spend"] / df["video_views_100"].replace(
+        0, float("nan")
+    )
+    df["reach_per_pound"] = df["reach"] / df["spend"].replace(0, float("nan"))
+    df["cpm"] = (df["spend"] / imp) * 1000
+
+    df = compute_canonical_metrics(df)
+    df = compute_duration_adjusted_completion(df)
+    df = compute_audience_consistency(df_raw, df)
+
+    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+
+    name_to_platforms = (
+        df_raw.groupby("creative_name")["platform"]
+        .apply(lambda x: ", ".join(sorted(x.unique())))
+        .to_dict()
+    )
+    df["platforms_active"] = df["creative_name"].map(name_to_platforms)
+    df["cross_platform"] = df["platforms_active"].str.contains(",", na=False)
+
+    return df_raw, df
+
+
+def load_data_from_sheets(
+    sheets: dict[str, list[list]], column_mapping: Optional[dict[str, str]] = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load parsed browser sheet rows and return (df_raw, df_agg)."""
+    sheet_configs = [
+        ("Data Analysis Paid Meta", "Meta", "Paid"),
+        ("Data Analysis Paid TikTok", "TikTok", "Paid"),
+        ("Data Analysis Boosting Meta", "Meta", "Boosting"),
+        ("Data Analysis Boosting TikTok", "TikTok", "Boosting"),
+    ]
+
+    frames = []
+    for sheet_name, platform_default, buying_type in sheet_configs:
+        if sheet_name in sheets:
+            result = _load_sheet_from_rows(
+                sheets[sheet_name], sheet_name, platform_default, buying_type
+            )
+            if not result.empty:
+                frames.append(result)
+
+    if not frames:
+        from src.data_mapping import iter_candidate_dataframes_from_sheets
+
+        frames.extend(
+            _load_unstructured_frames(
+                iter_candidate_dataframes_from_sheets(sheets),
+                column_mapping=column_mapping,
+            )
+        )
+
+    return _finish_loaded_frames(frames)

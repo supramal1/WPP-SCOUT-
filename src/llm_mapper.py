@@ -115,6 +115,10 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
             ),
         )
         
+        result = response.text
+        if not result:
+            raise ValueError("Gemini returned an empty mapping response")
+
         mapping = json.loads(result)
             
         # Filter out invalid target keys and ensure uniqueness

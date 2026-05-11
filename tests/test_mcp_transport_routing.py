@@ -68,3 +68,61 @@ def test_get_sse_with_mcp_session_id_uses_streamable_http_manager():
     )
 
     assert calls == [("streamable", "GET")]
+
+
+def test_streamable_post_wildcard_accept_is_normalized_for_mcp():
+    seen_headers = []
+
+    async def fake_classic(scope, receive, send):
+        raise AssertionError("classic handler should not be used")
+
+    async def fake_streamable(scope, receive, send):
+        seen_headers.extend(scope["headers"])
+
+    endpoint = MergedMcpEndpoint(
+        classic_sse_handler=fake_classic,
+        streamable_http_handler=fake_streamable,
+    )
+
+    asyncio.run(
+        endpoint(
+            {
+                "type": "http",
+                "method": "POST",
+                "headers": [(b"accept", b"*/*"), (b"content-type", b"application/json")],
+            },
+            None,
+            None,
+        )
+    )
+
+    assert dict(seen_headers)[b"accept"] == b"application/json, text/event-stream"
+
+
+def test_streamable_get_wildcard_accept_is_normalized_for_mcp():
+    seen_headers = []
+
+    async def fake_classic(scope, receive, send):
+        raise AssertionError("classic handler should not be used")
+
+    async def fake_streamable(scope, receive, send):
+        seen_headers.extend(scope["headers"])
+
+    endpoint = MergedMcpEndpoint(
+        classic_sse_handler=fake_classic,
+        streamable_http_handler=fake_streamable,
+    )
+
+    asyncio.run(
+        endpoint(
+            {
+                "type": "http",
+                "method": "GET",
+                "headers": [(b"mcp-session-id", b"session-1"), (b"accept", b"*/*")],
+            },
+            None,
+            None,
+        )
+    )
+
+    assert dict(seen_headers)[b"accept"] == b"text/event-stream"

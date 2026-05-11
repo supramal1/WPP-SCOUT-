@@ -588,12 +588,39 @@ class MergedMcpEndpoint:
         self.classic_sse_handler = classic_sse_handler
         self.streamable_http_handler = streamable_http_handler
 
+    @staticmethod
+    def _scope_with_mcp_accept(scope, accept_value: bytes):
+        headers = list(scope.get("headers") or [])
+        normalized_headers = [
+            (name, value) for name, value in headers if name.lower() != b"accept"
+        ]
+        normalized_headers.append((b"accept", accept_value))
+        return {**scope, "headers": normalized_headers}
+
+    @staticmethod
+    def _has_explicit_accept(scope, required_types: tuple[bytes, ...]) -> bool:
+        headers = dict(scope.get("headers") or [])
+        accept = headers.get(b"accept", b"").lower()
+        return all(required_type in accept for required_type in required_types)
+
     async def __call__(self, scope, receive, send):
         headers = dict(scope.get("headers") or [])
         is_streamable_session_get = b"mcp-session-id" in headers
         if scope.get("method") == "GET" and not is_streamable_session_get:
             await self.classic_sse_handler(scope, receive, send)
             return
+
+        if scope.get("method") == "POST" and not self._has_explicit_accept(
+            scope, (b"application/json", b"text/event-stream")
+        ):
+            scope = self._scope_with_mcp_accept(
+                scope, b"application/json, text/event-stream"
+            )
+        elif scope.get("method") == "GET" and is_streamable_session_get and not self._has_explicit_accept(
+            scope, (b"text/event-stream",)
+        ):
+            scope = self._scope_with_mcp_accept(scope, b"text/event-stream")
+
         await self.streamable_http_handler(scope, receive, send)
 
 

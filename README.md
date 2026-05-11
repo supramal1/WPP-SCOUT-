@@ -134,6 +134,8 @@ The MCP server stores analyzed data in process memory. `ingest_data` returns a `
 
 ## MCP Data Ingest Workflow
 
+Remote agents should treat upload as the default path. If the user provides a file from their laptop or chat attachment, read the bytes and send them to Scout with chunked upload. `file_path` is only for files that already exist on the Scout server filesystem; a client-local path such as `/Users/.../Downloads/file.xlsx` will not be readable by the remote Cloud Run service.
+
 For small files, `preview_data_mapping` and `ingest_data` still accept:
 
 ```json
@@ -146,11 +148,26 @@ For small files, `preview_data_mapping` and `ingest_data` still accept:
 For normal campaign workbooks, prefer chunked upload so the agent does not have to pass one large base64 argument:
 
 1. Call `create_file_upload_session` with `file_name`.
-2. Base64-encode the file and send it in smaller chunks with `append_file_upload_chunk`.
+2. Base64-encode the file and send it in smaller chunks with `append_file_upload_chunk` using `chunk_data_base64` (the older `data_base64` alias is also accepted).
 3. Call `finalize_file_upload`.
-4. Pass the returned `upload_id` to `preview_data_mapping`.
-5. Review `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, and `sample_normalized_rows`.
-6. Pass the same `upload_id` plus `mapping_id` to `ingest_data`.
+4. Pass the returned `upload_id` or `file_handle` to `preview_data_mapping`.
+5. If needed, include `sheet_name` and `header_row`; `header_row` is 1-based, so Excel row 6 is `header_row: 6`.
+6. Review `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, and `sample_normalized_rows`.
+7. Pass the same `upload_id` plus `mapping_id` to `ingest_data`.
+
+Minimal chunked upload payloads:
+
+```json
+{ "file_name": "campaign_export.xlsx", "total_size": 7823412 }
+```
+
+```json
+{ "upload_id": "<upload_id>", "chunk_index": 0, "chunk_data_base64": "<base64 chunk>" }
+```
+
+```json
+{ "upload_id": "<upload_id>", "sheet_name": "Data Analysis (All)", "header_row": 6 }
+```
 
 Local or self-hosted agents can also pass a server-accessible `file_path`, `file://` handle, or `upload:<upload_id>` handle to `preview_data_mapping` and `ingest_data`. Remote WPP Open agents should use chunked upload unless the host provides a server-side file handle.
 
@@ -164,6 +181,18 @@ Useful MCP tools:
 | `finalize_file_upload` | Decodes the uploaded chunks and returns a reusable `upload_id` / `file_handle`. |
 | `preview_data_mapping` | Returns proposed column mapping, diagnostics, schema, and sample normalized rows before scoring. |
 | `ingest_data` | Scores the finalized upload or file once the mapping has been confirmed. |
+| `rank_creatives` | Post-ingest ranking by any numeric metric, including Scout `composite_score` or workbook `performance_score`. |
+
+Workbook parsing options accepted by `preview_data_mapping` and `ingest_data`:
+
+| Option | Purpose |
+|---|---|
+| `sheet_name` | Parse one named sheet, for example `Data Analysis (All)`. |
+| `header_row` | 1-based Excel header row, for example `6` for row 6. |
+
+Workbook-provided scoring:
+
+Map columns such as `Creative Efficiency Index`, `Performance Score`, or `Performance Index` to `performance_score`. Scout preserves this alongside its own `composite_score`, and `rank_creatives` can rank by either metric.
 
 ## Optional FastAPI Harness
 
@@ -292,6 +321,7 @@ These are the fields that the mapping layer can target.
 | `concept` | no | Creative concept rollup label. If missing, concept tools fall back to `creative_name`. |
 | `product` | no | Product label for enrichment/filtering. |
 | `wave` | no | Campaign wave label for enrichment/filtering. |
+| `performance_score` | no | Workbook-provided score or performance index, such as `Creative Efficiency Index`; preserved separately from Scout `composite_score`. |
 
 Required fields are minimal so WPP Scout can ingest a wide range of exports. Better optional metric coverage produces better scoring and explanations.
 

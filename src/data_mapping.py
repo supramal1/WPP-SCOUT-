@@ -30,6 +30,7 @@ TARGET_FIELDS = {
     "concept": "Creative concept rollup label. If absent, creative_name is used.",
     "product": "Product or product family label.",
     "wave": "Campaign wave or flight label.",
+    "performance_score": "Workbook-provided score or performance index to preserve alongside Scout's composite_score.",
 }
 
 REQUIRED_FIELDS = ["creative_name", "platform", "objective", "spend", "impressions"]
@@ -62,6 +63,13 @@ FIELD_ALIASES = {
     "concept": ["concept", "creative territory", "idea"],
     "product": ["product", "product family"],
     "wave": ["wave", "flight", "phase"],
+    "performance_score": [
+        "score",
+        "performance score",
+        "performance index",
+        "creative efficiency index",
+        "efficiency index",
+    ],
 }
 
 
@@ -81,9 +89,12 @@ def get_canonical_schema() -> dict:
         "outcome_fields": OUTCOME_FIELDS,
         "minimum_viable_mapping": REQUIRED_FIELDS,
         "notes": [
+            "Remote MCP agents should upload files by default: create_file_upload_session, append_file_upload_chunk, finalize_file_upload, preview_data_mapping, ingest_data.",
+            "file_path is only for files already available on the Scout server. Client-local desktop/download paths must be uploaded.",
             "Use preview_data_mapping before ingesting non-standard exports.",
             "vtr_2s is the early attention field for 2-second views, 3-second views, or hook rate.",
             "video_views_100 is the completed-view count used for completion-rate metrics.",
+            "performance_score preserves a workbook-provided score such as Creative Efficiency Index; Scout's own score remains composite_score.",
         ],
     }
 
@@ -211,6 +222,23 @@ def iter_candidate_dataframes(filepath: str) -> list[tuple[str, pd.DataFrame]]:
     return frames
 
 
+def read_selected_dataframe(
+    filepath: str, sheet_name: str | None = None, header_row: int | None = None
+) -> tuple[str, pd.DataFrame]:
+    path = Path(filepath)
+    if path.suffix.lower() == ".csv":
+        return path.stem, pd.read_csv(path, header=(header_row - 1) if header_row else 0)
+
+    xl = pd.ExcelFile(filepath)
+    selected_sheet = sheet_name or xl.sheet_names[0]
+    if selected_sheet not in xl.sheet_names:
+        raise ValueError(
+            f"Sheet '{selected_sheet}' not found. Available sheets: {', '.join(xl.sheet_names)}"
+        )
+    header = (int(header_row) - 1) if header_row is not None else 0
+    return selected_sheet, pd.read_excel(xl, sheet_name=selected_sheet, header=header)
+
+
 def rows_to_dataframe(rows: list[list]) -> pd.DataFrame:
     """Convert SheetJS-style array rows to a dataframe using the most likely header row."""
     if not rows:
@@ -285,6 +313,8 @@ def create_best_mapping_preview_from_sheets(
 def create_best_mapping_preview(
     filepath: str,
     mapping_provider: Optional[Callable[[pd.DataFrame], dict[str, str]]] = None,
+    sheet_name: str | None = None,
+    header_row: int | None = None,
 ) -> dict:
     """Create the highest-coverage mapping preview for an uploaded file."""
     if mapping_provider is None:
@@ -293,7 +323,12 @@ def create_best_mapping_preview(
         mapping_provider = generate_column_mapping
 
     previews = []
-    for sheet_name, df in iter_candidate_dataframes(filepath):
+    candidates = (
+        [read_selected_dataframe(filepath, sheet_name, header_row)]
+        if sheet_name or header_row
+        else iter_candidate_dataframes(filepath)
+    )
+    for sheet_name, df in candidates:
         mapping = mapping_provider(df)
         previews.append(create_mapping_preview(df, sheet_name, mapping))
 

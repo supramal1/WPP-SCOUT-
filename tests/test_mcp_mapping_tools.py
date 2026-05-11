@@ -52,6 +52,38 @@ def _sample_df() -> pd.DataFrame:
     )
 
 
+def _standard_sheet_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Creative Name": ["Creative A", "Creative B", "Creative C"],
+            "Platform": ["Meta", "Meta", "TikTok"],
+            "Objective": ["Awareness", "Awareness", "Video Views"],
+            "Format": ["Video", "Video", "Video"],
+            "Placement": ["Feed", "Feed", "In Feed"],
+            "Campaign": ["Campaign 1", "Campaign 1", "Campaign 2"],
+            "Reach": [20000, 25000, 30000],
+            "Impressions": [30000, 40000, 70000],
+            "Spends": [1000, 1200, 1500],
+            "3s VTR": [10.0, 20.0, 5.0],
+            "2s VTR": [0.0, 0.0, 25.0],
+            "Video Completion": [300, 800, 1200],
+            "Total Engagement": [100, 300, 400],
+            "Creative Efficiency Index": [44.0, 91.0, 72.0],
+            "Concept": ["Concept A", "Concept B", "Concept C"],
+        }
+    )
+
+
+def _write_offset_sheet(path: Path, df: pd.DataFrame) -> None:
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        df.to_excel(
+            writer,
+            sheet_name="Data Analysis (All)",
+            startrow=5,
+            index=False,
+        )
+
+
 def test_mcp_mapping_preview_and_ingest_with_mapping_id(monkeypatch):
     df = _sample_df()
     file_data_base64 = _xlsx_base64(df)
@@ -156,18 +188,26 @@ def test_mcp_chunked_upload_can_preview_and_ingest(monkeypatch, tmp_path):
     SESSION_STATE["mapping_previews"] = {}
 
     create_response = asyncio.run(
-        call_tool("create_file_upload_session", {"file_name": "planner_export.xlsx"})
+        call_tool(
+            "create_file_upload_session",
+            {
+                "file_name": "planner_export.xlsx",
+                "total_size": file_path.stat().st_size,
+                "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+        )
     )
     upload = json.loads(create_response[0].text)
     upload_id = upload["upload_id"]
 
     for index, chunk in enumerate((encoded[:midpoint], encoded[midpoint:])):
+        chunk_field = "chunk_data_base64" if index == 0 else "data_base64"
         append_response = asyncio.run(
             call_tool(
                 "append_file_upload_chunk",
                 {
                     "upload_id": upload_id,
-                    "chunk_data_base64": chunk,
+                    chunk_field: chunk,
                     "chunk_index": index,
                 },
             )
@@ -215,3 +255,97 @@ def test_mcp_exposes_canonical_schema_tool():
     ]
     assert schema["fields"]["spend"]["required"] is True
     assert schema["fields"]["video_views_100"]["aliases"]
+    assert schema["fields"]["performance_score"]["aliases"]
+
+
+def test_mcp_ingest_accepts_sheet_name_header_row_and_rank_query(tmp_path):
+    workbook_path = tmp_path / "offset_workbook.xlsx"
+    _write_offset_sheet(workbook_path, _standard_sheet_df())
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+    assert ingest["status"] == "ok"
+    session_id = ingest["session_id"]
+
+    ranking_response = asyncio.run(
+        call_tool(
+            "rank_creatives",
+            {
+                "session_id": session_id,
+                "metric": "performance_score",
+                "group_by": "concept",
+                "top_n": 2,
+                "bottom_n": 1,
+                "min_spend": 0,
+            },
+        )
+    )
+    ranking = json.loads(ranking_response[0].text)
+
+    assert ranking["status"] == "ok"
+    assert ranking["metric"] == "performance_score"
+    assert ranking["top"][0]["concept"] == "Concept B"
+    assert ranking["top"][0]["performance_score"] == 91.0
+    assert ranking["bottom"][0]["concept"] == "Concept A"
+
+
+def test_mcp_rank_creatives_handles_grouped_list_values(tmp_path):
+    workbook_path = tmp_path / "multi_platform_group.xlsx"
+    df = _standard_sheet_df()
+    df.loc[0, "Concept"] = "Shared Concept"
+    df.loc[1, "Concept"] = "Shared Concept"
+    df.loc[1, "Platform"] = "TikTok"
+    _write_offset_sheet(workbook_path, df)
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    ranking_response = asyncio.run(
+        call_tool(
+            "rank_creatives",
+            {
+                "session_id": ingest["session_id"],
+                "metric": "performance_score",
+                "group_by": "concept",
+                "top_n": 2,
+                "bottom_n": 0,
+                "min_spend": 0,
+            },
+        )
+    )
+    ranking = json.loads(ranking_response[0].text)
+
+    assert ranking["status"] == "ok"
+    shared = next(row for row in ranking["top"] if row["concept"] == "Shared Concept")
+    assert shared["platforms"] == ["Meta", "TikTok"]
+    assert shared["performance_score"] == 67.5
+
+
+def test_mcp_file_path_error_explains_remote_upload_default():
+    response = asyncio.run(
+        call_tool(
+            "preview_data_mapping",
+            {"file_path": "/Users/someone/Desktop/local-only.xlsx"},
+        )
+    )
+
+    assert "This path is local to the client" in response[0].text
+    assert "chunked upload" in response[0].text

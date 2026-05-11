@@ -59,15 +59,17 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="ingest_data",
-            description="Uploads and analyzes campaign data. Accepts file_data_base64, upload_id from chunked upload, or a server-local file_path/file_handle. Use preview_data_mapping first for non-standard exports, then pass mapping_id or column_mapping.",
+            description="UPLOAD WORKFLOW STEP 5 OF 5: analyze a finalized upload_id. Default remote path is create_file_upload_session -> append_file_upload_chunk -> finalize_file_upload -> preview_data_mapping -> ingest_data. file_path is server-local only; client-local files must be uploaded.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "file_data_base64": {"type": "string", "description": "Base64 encoded Excel or CSV file."},
+                    "upload_id": {"type": "string", "description": "Preferred remote input. Returned by create_file_upload_session/finalize_file_upload."},
+                    "file_data_base64": {"type": "string", "description": "Small-file fallback only. Base64 encoded Excel or CSV file."},
                     "file_name": {"type": "string", "description": "e.g., 'data.xlsx'. Required only when file_data_base64 is used."},
-                    "file_path": {"type": "string", "description": "Server-local CSV or Excel path. Useful for local/self-hosted agents."},
+                    "file_path": {"type": "string", "description": "Server-local path only. Do not send a client-local desktop/download path to remote Scout; upload the bytes instead."},
                     "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
-                    "upload_id": {"type": "string", "description": "Chunked upload ID returned by create_file_upload_session/finalize_file_upload."},
+                    "sheet_name": {"type": "string", "description": "Optional Excel sheet to parse, e.g. 'Data Analysis (All)'."},
+                    "header_row": {"type": "integer", "description": "Optional 1-based Excel header row, e.g. 6 for row 6."},
                     "min_spend": {"type": "number", "default": 500},
                     "min_reach": {"type": "number", "default": 10000},
                     "mapping_id": {"type": "string", "description": "Mapping preview ID returned by preview_data_mapping."},
@@ -81,25 +83,29 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="preview_data_mapping",
-            description="Preview how an uploaded non-standard Excel/CSV export maps to WPP Scout's canonical campaign schema before ingesting. Accepts file_data_base64, upload_id, or server-local file_path/file_handle.",
+            description="UPLOAD WORKFLOW STEP 4 OF 5: preview mapping diagnostics for a finalized upload_id before ingest_data. Supports sheet_name and 1-based header_row. file_path is server-local only.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "file_data_base64": {"type": "string", "description": "Base64 encoded Excel or CSV file."},
+                    "upload_id": {"type": "string", "description": "Preferred remote input from finalize_file_upload."},
+                    "file_data_base64": {"type": "string", "description": "Small-file fallback only. Base64 encoded Excel or CSV file."},
                     "file_name": {"type": "string", "description": "e.g., 'planner_export.xlsx'. Required only when file_data_base64 is used."},
-                    "file_path": {"type": "string", "description": "Server-local CSV or Excel path. Useful for local/self-hosted agents."},
+                    "file_path": {"type": "string", "description": "Server-local path only. Client-local files must be uploaded."},
                     "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
-                    "upload_id": {"type": "string", "description": "Chunked upload ID returned by create_file_upload_session/finalize_file_upload."},
+                    "sheet_name": {"type": "string", "description": "Optional Excel sheet to parse, e.g. 'Data Analysis (All)'."},
+                    "header_row": {"type": "integer", "description": "Optional 1-based Excel header row, e.g. 6 for row 6."},
                 }
             }
         ),
         Tool(
             name="create_file_upload_session",
-            description="Start a chunked file upload for larger CSV/XLS/XLSX campaign exports. Append base64 chunks, finalize, then pass upload_id to preview_data_mapping or ingest_data.",
+            description="UPLOAD WORKFLOW STEP 1 OF 5: start remote upload for CSV/XLS/XLSX. Then call append_file_upload_chunk, finalize_file_upload, preview_data_mapping, ingest_data.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_name": {"type": "string", "description": "Original file name, e.g. campaign.xlsx."},
+                    "mime_type": {"type": "string", "description": "Optional source MIME type for diagnostics."},
+                    "total_size": {"type": "integer", "description": "Optional expected decoded file size; alias of expected_size_bytes."},
                     "expected_size_bytes": {"type": "integer", "description": "Optional expected decoded file size."},
                     "expected_chunks": {"type": "integer", "description": "Optional expected chunk count."},
                 },
@@ -108,20 +114,21 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="append_file_upload_chunk",
-            description="Append one base64 chunk to a chunked upload session. Chunks can split the base64 string at any boundary.",
+            description="UPLOAD WORKFLOW STEP 2 OF 5: append one base64 chunk to an upload session. Then call finalize_file_upload, preview_data_mapping, ingest_data.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "upload_id": {"type": "string"},
-                    "chunk_data_base64": {"type": "string"},
+                    "chunk_data_base64": {"type": "string", "description": "Canonical base64 chunk field."},
+                    "data_base64": {"type": "string", "description": "Backward-compatible alias for chunk_data_base64."},
                     "chunk_index": {"type": "integer", "description": "Optional zero-based chunk index for diagnostics."},
                 },
-                "required": ["upload_id", "chunk_data_base64"],
+                "required": ["upload_id"],
             },
         ),
         Tool(
             name="finalize_file_upload",
-            description="Decode and finalize a chunked upload. The returned upload_id can be used by preview_data_mapping or ingest_data.",
+            description="UPLOAD WORKFLOW STEP 3 OF 5: decode and finalize chunks. Then call preview_data_mapping with upload_id, then ingest_data.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -132,7 +139,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_canonical_schema",
-            description="Returns WPP Scout's canonical campaign schema, required fields, outcome fields, and common aliases for mapping exports.",
+            description="Returns WPP Scout's canonical campaign schema, required fields, outcome fields, custom performance_score field, common aliases, and upload-first workflow guidance.",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
@@ -146,8 +153,28 @@ async def list_tools() -> list[Tool]:
                     "file_path": {"type": "string"},
                     "file_handle": {"type": "string"},
                     "upload_id": {"type": "string"},
+                    "sheet_name": {"type": "string"},
+                    "header_row": {"type": "integer"},
                 }
             }
+        ),
+        Tool(
+            name="rank_creatives",
+            description="Post-ingest analysis query. Rank creatives or grouped cohorts by any numeric metric such as composite_score, spend, reach, vtr_2s, engagement_rate, ctr, or workbook-provided performance_score.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "metric": {"type": "string", "default": "composite_score"},
+                    "group_by": {"type": "string", "description": "Optional grouping field, e.g. creative_name, concept, platform, objective, format_canonical, placement_canonical, asset_type_canonical, os_target."},
+                    "top_n": {"type": "integer", "default": 10},
+                    "bottom_n": {"type": "integer", "default": 10},
+                    "min_spend": {"type": "number", "default": 0},
+                    "platform": {"type": "string"},
+                    "objective": {"type": "string"},
+                    "include_low_confidence": {"type": "boolean", "default": True},
+                },
+            },
         ),
         Tool(
             name="get_top_performers",
@@ -355,6 +382,21 @@ def _get_session(arguments: dict) -> dict | None:
     return None
 
 
+def _safe_number(value):
+    if isinstance(value, dict):
+        return {key: _safe_number(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_number(item) for item in value]
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def _upload_root() -> Path:
     root = Path(os.environ.get("WPP_SCOUT_UPLOAD_DIR", "/tmp/wpp-scout-uploads"))
     root.mkdir(parents=True, exist_ok=True)
@@ -411,7 +453,10 @@ def _resolve_input_file(arguments: dict, tmpdir: str) -> Path:
                 "Unsupported file type. Use a .csv, .xls, or .xlsx campaign export."
             )
         if not path.exists() or not path.is_file():
-            raise ValueError(f"File path is not available to Scout: {file_path}")
+            raise ValueError(
+                f"This path is local to the client or unavailable to the remote Scout server: {file_path}. "
+                "Use file upload/base64/chunked upload for remote MCP."
+            )
         return path
 
     file_data_base64 = arguments.get("file_data_base64")
@@ -446,11 +491,12 @@ async def handle_create_file_upload_session(arguments: dict) -> list[TextContent
     SESSION_STATE.setdefault("uploads", {})[upload_id] = {
         "status": "created",
         "file_name": file_name,
+        "mime_type": arguments.get("mime_type"),
         "base64_path": str(base64_path),
         "file_path": str(final_path),
         "chunk_count": 0,
         "received_base64_chars": 0,
-        "expected_size_bytes": arguments.get("expected_size_bytes"),
+        "expected_size_bytes": arguments.get("expected_size_bytes") or arguments.get("total_size"),
         "expected_chunks": arguments.get("expected_chunks"),
     }
     return _json_response(
@@ -466,7 +512,7 @@ async def handle_create_file_upload_session(arguments: dict) -> list[TextContent
 
 async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
     upload_id = arguments.get("upload_id")
-    chunk = arguments.get("chunk_data_base64", "")
+    chunk = arguments.get("chunk_data_base64") or arguments.get("data_base64") or ""
     upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id)
     if upload is None:
         return _json_response({"status": "error", "message": f"Unknown upload_id: {upload_id}"})
@@ -537,7 +583,12 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             tmp_path = _resolve_input_file(arguments, tmpdir)
-            df_raw, df = load_data(str(tmp_path), column_mapping=column_mapping)
+            df_raw, df = load_data(
+                str(tmp_path),
+                column_mapping=column_mapping,
+                sheet_name=arguments.get("sheet_name"),
+                header_row=arguments.get("header_row"),
+            )
             df['low_confidence'] = (df['spend'] < float(min_spend)) | (df['reach'] < float(min_reach))
             scored = score_creatives(df)
             explained = generate_explanations(scored)
@@ -569,7 +620,11 @@ async def handle_mapping_preview(arguments: dict) -> list[TextContent]:
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             tmp_path = _resolve_input_file(arguments, tmpdir)
-            preview = create_best_mapping_preview(str(tmp_path))
+            preview = create_best_mapping_preview(
+                str(tmp_path),
+                sheet_name=arguments.get("sheet_name"),
+                header_row=arguments.get("header_row"),
+            )
             mapping_id = str(uuid.uuid4())
             preview = {**preview, "mapping_id": mapping_id}
             SESSION_STATE["mapping_previews"][mapping_id] = preview
@@ -577,6 +632,115 @@ async def handle_mapping_preview(arguments: dict) -> list[TextContent]:
         except Exception as e:
             logger.error(f"Mapping preview failed: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Mapping preview failed: {str(e)}")]
+
+
+def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[TextContent]:
+    metric = arguments.get("metric") or "composite_score"
+    group_by = arguments.get("group_by")
+    top_n = int(arguments.get("top_n", 10))
+    bottom_n = int(arguments.get("bottom_n", 10))
+    min_spend = float(arguments.get("min_spend", 0))
+
+    if metric not in explained.columns:
+        return _json_response(
+            {
+                "status": "error",
+                "message": f"Metric '{metric}' not found.",
+                "available_numeric_metrics": sorted(
+                    col
+                    for col in explained.columns
+                    if pd.api.types.is_numeric_dtype(explained[col])
+                ),
+            }
+        )
+    if not pd.api.types.is_numeric_dtype(explained[metric]):
+        return _json_response(
+            {"status": "error", "message": f"Metric '{metric}' is not numeric."}
+        )
+
+    ranked = explained.copy()
+    if min_spend:
+        ranked = ranked[ranked["spend"] >= min_spend]
+    if not arguments.get("include_low_confidence", True):
+        ranked = ranked[~ranked["low_confidence"]]
+    platform = arguments.get("platform")
+    if platform and platform != "All":
+        ranked = ranked[ranked["platform"] == platform]
+    objective = arguments.get("objective")
+    if objective:
+        ranked = ranked[
+            ranked["objective_normalized"].str.contains(objective, case=False, na=False)
+        ]
+
+    if group_by:
+        if group_by not in ranked.columns:
+            return _json_response(
+                {"status": "error", "message": f"group_by '{group_by}' not found."}
+            )
+        grouped = (
+            ranked.groupby(group_by, dropna=False)
+            .agg(
+                **{
+                    metric: (metric, "mean"),
+                    "spend": ("spend", "sum"),
+                    "reach": ("reach", "sum"),
+                    "impressions": ("impressions", "sum"),
+                    "creative_rows": ("creative_name", "count"),
+                    "platforms": ("platform", lambda x: sorted(set(x.dropna()))),
+                    "objectives": (
+                        "objective_normalized",
+                        lambda x: sorted(set(x.dropna())),
+                    ),
+                }
+            )
+            .reset_index()
+        )
+        ranked_output = grouped
+    else:
+        keep_cols = [
+            "creative_name",
+            "concept",
+            "platform",
+            "objective_normalized",
+            "format_canonical",
+            "placement_canonical",
+            "tier",
+            "action",
+            "spend",
+            "reach",
+            "impressions",
+            "low_confidence",
+            metric,
+        ]
+        ranked_output = ranked[[col for col in keep_cols if col in ranked.columns]]
+
+    top = ranked_output.sort_values(metric, ascending=False).head(top_n)
+    bottom = ranked_output.sort_values(metric, ascending=True).head(bottom_n)
+
+    return _json_response(
+        {
+            "status": "ok",
+            "metric": metric,
+            "group_by": group_by,
+            "filters": {
+                "min_spend": min_spend,
+                "platform": platform,
+                "objective": objective,
+                "include_low_confidence": arguments.get(
+                    "include_low_confidence", True
+                ),
+            },
+            "row_count": int(len(ranked_output)),
+            "top": [
+                {key: _safe_number(value) for key, value in row.items()}
+                for row in top.to_dict(orient="records")
+            ],
+            "bottom": [
+                {key: _safe_number(value) for key, value in row.items()}
+                for row in bottom.to_dict(orient="records")
+            ],
+        }
+    )
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
@@ -616,6 +780,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             
             top = filtered.sort_values("composite_score", ascending=False).head(limit)
             return [TextContent(type="text", text=json.dumps(_format_creative_list(top), indent=2))]
+
+        elif name == "rank_creatives":
+            return handle_rank_creatives(arguments, explained)
 
         elif name == "get_bottom_performers":
             limit = arguments.get("limit", 10)

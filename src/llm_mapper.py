@@ -32,6 +32,7 @@ TARGET_FIELDS = {
     "asset_type_raw": "Granular asset type (e.g., BAU, Creator, Partner).",
     "os_target": "Operating system targeted (e.g., iOS, Android, All).",
     "audience_segment": "Audience or targeting segment.",
+    "performance_score": "Workbook-provided score or performance index to preserve alongside Scout's composite_score.",
 }
 
 # Provide few-shot examples of common column renames
@@ -156,7 +157,8 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
             "os_target": ["os", "operating"],
             "cpm": ["cpm"],
             "engagements": ["engagement", "interaction"],
-            "shares": ["share"]
+            "shares": ["share"],
+            "performance_score": ["score", "performance index", "efficiency index"],
         }
         
         for col in columns_list:

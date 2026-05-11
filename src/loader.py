@@ -817,6 +817,18 @@ def _load_sheet(
             "concept": _pick_col(df, ["Concept"], "").astype(str),
             "product": _pick_col(df, ["Product"], "").astype(str),
             "wave": _pick_col(df, ["Wave"], "").astype(str),
+            "performance_score": pd.to_numeric(
+                _pick_col(
+                    df,
+                    [
+                        "Performance Score",
+                        "Performance Index",
+                        "Creative Efficiency Index",
+                    ],
+                    float("nan"),
+                ),
+                errors="coerce",
+            ),
         }
     )
 
@@ -874,6 +886,7 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
 
     mean_cols = {
         "duration_s": "first",
+        "performance_score": "mean",
     }
 
     count_col = {"ad_id": "count"}
@@ -1112,6 +1125,9 @@ def normalize_unstructured_dataframe(
             "concept": get_col(["concept"], "").astype(str),
             "product": get_col(["product"], "").astype(str),
             "wave": get_col(["wave"], "").astype(str),
+            "performance_score": pd.to_numeric(
+                get_col(["performance_score"], float("nan")), errors="coerce"
+            ),
         }
     )
 
@@ -1143,8 +1159,37 @@ def _load_unstructured_frames(
     return frames
 
 
+def _load_selected_excel_sheet(
+    filepath: str,
+    sheet_name: str,
+    header_row: Optional[int] = None,
+    column_mapping: Optional[dict[str, str]] = None,
+) -> list[pd.DataFrame]:
+    xl = pd.ExcelFile(filepath)
+    if sheet_name not in xl.sheet_names:
+        raise ValueError(
+            f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(xl.sheet_names)}"
+        )
+
+    header = (int(header_row) - 1) if header_row is not None else 0
+    df_sheet = pd.read_excel(xl, sheet_name=sheet_name, header=header)
+    df_sheet.columns = [
+        str(c).strip().replace("\n", " ") if c is not None else ""
+        for c in df_sheet.columns
+    ]
+    standard_cols = {"Creative Name", "Impressions", "Spends"}
+    if standard_cols.issubset(set(df_sheet.columns)):
+        return [_load_sheet(xl, sheet_name, "Unknown", "Paid", header=header)]
+    return _load_unstructured_frames(
+        [(sheet_name, df_sheet)], column_mapping=column_mapping
+    )
+
+
 def load_data(
-    filepath: str, column_mapping: Optional[dict[str, str]] = None
+    filepath: str,
+    column_mapping: Optional[dict[str, str]] = None,
+    sheet_name: Optional[str] = None,
+    header_row: Optional[int] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load Excel file and return (df_raw, df_agg).
 
@@ -1177,6 +1222,15 @@ def load_data(
         frames.extend(
             _load_unstructured_frames(
                 [(path.stem, pd.read_csv(filepath))], column_mapping=column_mapping
+            )
+        )
+    elif sheet_name:
+        frames.extend(
+            _load_selected_excel_sheet(
+                filepath,
+                sheet_name=sheet_name,
+                header_row=header_row,
+                column_mapping=column_mapping,
             )
         )
     else:

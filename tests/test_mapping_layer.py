@@ -125,3 +125,43 @@ def test_heuristic_mapping_handles_planner_export_labels(monkeypatch):
     assert mapping["3s Video Plays"] == "vtr_2s"
     assert mapping["100% Video Completions"] == "video_views_100"
     assert mapping["Total Engagements"] == "engagements"
+
+
+def test_load_data_uses_explicit_sheet_name_header_row_and_performance_score(tmp_path):
+    workbook_path = tmp_path / "full_workbook_shape.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A", "Creative B"],
+            "Platform": ["Meta", "Meta"],
+            "Objective": ["Awareness", "Awareness"],
+            "Format": ["Video", "Video"],
+            "Placement": ["Feed", "Feed"],
+            "Campaign": ["Campaign 1", "Campaign 1"],
+            "Reach": [20000, 25000],
+            "Impressions": [30000, 40000],
+            "Spends": [1000, 1200],
+            "3s VTR": [10.0, 20.0],
+            "Video Completion": [300, 800],
+            "Total Engagement": [100, 300],
+            "Creative Efficiency Index": [44.0, 91.0],
+            "Concept": ["Concept A", "Concept B"],
+        }
+    )
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        df.to_excel(
+            writer,
+            sheet_name="Data Analysis (All)",
+            startrow=5,
+            index=False,
+        )
+
+    df_raw, df_agg = load_data(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+        header_row=6,
+    )
+
+    assert len(df_raw) == 2
+    assert set(df_agg["creative_name"]) == {"Creative A", "Creative B"}
+    assert "performance_score" in df_agg.columns
+    assert df_agg.loc[df_agg["creative_name"] == "Creative B", "performance_score"].iloc[0] == 91.0

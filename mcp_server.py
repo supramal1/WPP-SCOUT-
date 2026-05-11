@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import os
 import tempfile
 import json
@@ -13,6 +14,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
 
 from src.loader import load_data
@@ -568,6 +570,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 # Standard MCP SSE Transport
 sse = SseServerTransport("/messages")
+streamable_http = StreamableHTTPSessionManager(app=app)
 
 class SseEndpoint:
     async def __call__(self, scope, receive, send):
@@ -579,11 +582,49 @@ class MessageEndpoint:
     async def __call__(self, scope, receive, send):
         await sse.handle_post_message(scope, receive, send)
 
+
+class MergedMcpEndpoint:
+    def __init__(self, classic_sse_handler, streamable_http_handler):
+        self.classic_sse_handler = classic_sse_handler
+        self.streamable_http_handler = streamable_http_handler
+
+    async def __call__(self, scope, receive, send):
+        headers = dict(scope.get("headers") or [])
+        is_streamable_session_get = b"mcp-session-id" in headers
+        if scope.get("method") == "GET" and not is_streamable_session_get:
+            await self.classic_sse_handler(scope, receive, send)
+            return
+        await self.streamable_http_handler(scope, receive, send)
+
+
+class StreamableHttpEndpoint:
+    async def __call__(self, scope, receive, send):
+        await streamable_http.handle_request(scope, receive, send)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(starlette_app):
+    async with streamable_http.run():
+        yield
+
+
+classic_sse_endpoint = SseEndpoint()
+streamable_http_endpoint = StreamableHttpEndpoint()
+
 starlette_app = Starlette(
     routes=[
-        Route("/sse", endpoint=SseEndpoint()),
+        Route(
+            "/sse",
+            endpoint=MergedMcpEndpoint(
+                classic_sse_handler=classic_sse_endpoint,
+                streamable_http_handler=streamable_http_endpoint,
+            ),
+            methods=["GET", "POST", "DELETE"],
+        ),
+        Route("/mcp", endpoint=streamable_http_endpoint, methods=["GET", "POST", "DELETE"]),
         Route("/messages", endpoint=MessageEndpoint(), methods=["POST"]),
-    ]
+    ],
+    lifespan=lifespan,
 )
 
 if __name__ == "__main__":

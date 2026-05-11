@@ -239,6 +239,66 @@ def test_mcp_chunked_upload_can_preview_and_ingest(monkeypatch, tmp_path):
     assert ingest["creatives_analyzed"] == 2
 
 
+def test_mcp_preview_upload_without_args_handles_duplicate_headers(tmp_path):
+    df = pd.DataFrame(
+        [
+            ["Creative A", "Meta", "Awareness", 1000, 999, 30000, 20000],
+            ["Creative B", "TikTok", "Video Views", 1200, 888, 40000, 25000],
+        ],
+        columns=[
+            "Creative Name",
+            "Platform",
+            "Objective",
+            "Spends",
+            "Spends",
+            "Impressions",
+            "Reach",
+        ],
+    )
+    file_path = tmp_path / "duplicate_headers.xlsx"
+    _write_xlsx(file_path, df)
+    encoded = base64.b64encode(file_path.read_bytes()).decode("utf-8")
+    SESSION_STATE["uploads"] = {}
+    SESSION_STATE["mapping_previews"] = {}
+
+    create_response = asyncio.run(
+        call_tool(
+            "create_file_upload_session",
+            {
+                "file_name": "duplicate_headers.xlsx",
+                "expected_size_bytes": file_path.stat().st_size,
+                "expected_chunks": 1,
+            },
+        )
+    )
+    upload_id = json.loads(create_response[0].text)["upload_id"]
+
+    append_response = asyncio.run(
+        call_tool(
+            "append_file_upload_chunk",
+            {
+                "upload_id": upload_id,
+                "chunk_index": 0,
+                "chunk_data_base64": encoded,
+            },
+        )
+    )
+    assert json.loads(append_response[0].text)["status"] == "ok"
+    finalize_response = asyncio.run(call_tool("finalize_file_upload", {"upload_id": upload_id}))
+    assert json.loads(finalize_response[0].text)["status"] == "ok"
+
+    preview_response = asyncio.run(call_tool("preview_data_mapping", {"upload_id": upload_id}))
+    preview = json.loads(preview_response[0].text)
+
+    assert preview.get("status") != "error"
+    assert preview["ready_to_ingest"] is True
+    assert preview["sample_normalized_rows"][0]["spend"] == 1000
+    spend_diagnostic = next(
+        item for item in preview["mapping_diagnostics"] if item["canonical_field"] == "spend"
+    )
+    assert spend_diagnostic["sample_values"] == ["1000", "1200"]
+
+
 def test_mcp_chunked_upload_accepts_independently_encoded_padded_chunks(tmp_path):
     file_bytes = b"abcde"
     SESSION_STATE["uploads"] = {}

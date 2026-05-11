@@ -51,6 +51,44 @@ def test_create_mapping_preview_reports_validation_and_sample_rows():
     assert preview["confidence_by_field"]["creative_name"] >= 0.8
 
 
+def test_create_mapping_preview_handles_duplicate_source_columns():
+    df = pd.DataFrame(
+        [
+            ["Creative A", "Meta", "Awareness", 1000, 999, 30000, 20000],
+            ["Creative B", "TikTok", "Video Views", 1200, 888, 40000, 25000],
+        ],
+        columns=[
+            "Creative Name",
+            "Platform",
+            "Objective",
+            "Spends",
+            "Spends",
+            "Impressions",
+            "Reach",
+        ],
+    )
+
+    preview = create_mapping_preview(
+        df,
+        "Data Analysis (All)",
+        {
+            "Creative Name": "creative_name",
+            "Platform": "platform",
+            "Objective": "objective",
+            "Spends": "spend",
+            "Impressions": "impressions",
+            "Reach": "reach",
+        },
+    )
+
+    assert preview["ready_to_ingest"] is True
+    assert preview["sample_normalized_rows"][0]["spend"] == 1000
+    spend_diagnostic = next(
+        item for item in preview["mapping_diagnostics"] if item["canonical_field"] == "spend"
+    )
+    assert spend_diagnostic["sample_values"] == ["1000", "1200"]
+
+
 def test_create_mapping_preview_separates_metadata_from_ignored_columns():
     df = pd.DataFrame(
         {

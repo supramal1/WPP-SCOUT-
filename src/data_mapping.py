@@ -150,6 +150,32 @@ def _normalise_label(value) -> str:
     return " ".join(str(value or "").strip().replace("\n", " ").replace("_", " ").lower().split())
 
 
+def _column_series(df: pd.DataFrame, source: str) -> pd.Series:
+    selected = df.loc[:, source]
+    if isinstance(selected, pd.DataFrame):
+        for _, series in selected.items():
+            if not series.dropna().empty:
+                return series
+        return selected.iloc[:, 0]
+    return selected
+
+
+def _sample_normalized_rows(df: pd.DataFrame, valid_mapping: dict[str, str]) -> list[dict]:
+    sample_data = {}
+    for target in TARGET_FIELDS:
+        source = next(
+            (source for source, mapped_target in valid_mapping.items() if mapped_target == target),
+            None,
+        )
+        if source is None and target in df.columns:
+            source = target
+        if source is not None:
+            sample_data[target] = _column_series(df, source)
+    if not sample_data:
+        return []
+    return pd.DataFrame(sample_data).head(5).to_dict(orient="records")
+
+
 def create_mapping_preview(
     df: pd.DataFrame,
     sheet_name: str,
@@ -174,9 +200,7 @@ def create_mapping_preview(
         source for source in preserve_columns if source in df.columns and source not in valid_mapping
     ]
 
-    mapped_df = df.rename(columns=valid_mapping)
-    sample_cols = [field for field in TARGET_FIELDS if field in mapped_df.columns]
-    sample_rows = mapped_df[sample_cols].head(5).to_dict(orient="records")
+    sample_rows = _sample_normalized_rows(df, valid_mapping)
 
     warnings = []
     missing_required = [
@@ -212,9 +236,10 @@ def create_mapping_preview(
 
     mapping_diagnostics = []
     for source, target in valid_mapping.items():
+        source_series = _column_series(df, source)
         sample_values = [
             value
-            for value in df[source].dropna().head(3).astype(str).tolist()
+            for value in source_series.dropna().head(3).astype(str).tolist()
             if value and value.lower() != "nan"
         ]
         mapping_diagnostics.append(

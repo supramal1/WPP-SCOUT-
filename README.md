@@ -130,7 +130,7 @@ Local SSE endpoints:
 | `http://localhost:8765/sse` | MCP SSE connection endpoint. |
 | `http://localhost:8765/messages` | MCP message POST endpoint used by the SSE transport. |
 
-The MCP server stores analyzed data in process memory. `ingest_data` returns a `session_id`; pass it into later tools when running more than one analysis in the same process. If omitted, most tools use the active session.
+The MCP server stores analyzed data in process memory. `ingest_data` always returns a `session_id`; pass it into later tools. If a query omits `session_id`, Scout can still use the active session, but the response includes a warning and session summary. Strict agents should pass `require_session_id: true`.
 
 ## MCP Data Ingest Workflow
 
@@ -147,16 +147,19 @@ For small files, `preview_data_mapping` and `ingest_data` still accept:
 
 For normal campaign workbooks, prefer chunked upload so the agent does not have to pass one large base64 argument:
 
-1. Call `create_file_upload_session` with `file_name`.
-2. Base64-encode the file and send it in smaller chunks with `append_file_upload_chunk` using `chunk_data_base64` (the older `data_base64` alias is also accepted).
-3. Call `get_file_upload_status` if a chunk upload needs debugging or retry confirmation.
-4. Call `finalize_file_upload`.
-5. Pass the returned `upload_id` or `file_handle` to `preview_data_mapping`.
-6. If needed, include `sheet_name` and `header_row`; `header_row` is 1-based, so Excel row 6 is `header_row: 6`.
-7. Review `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, `sample_normalized_rows`, `canonical_mapped_fields`, and `preserved_metadata_fields`.
-8. Pass the same `upload_id` plus `mapping_id` to `ingest_data`.
+1. Optionally call `recommend_upload_plan` with `file_name` and `size_bytes` for chunk guidance.
+2. Call `create_file_upload_session` with `file_name`, `expected_size_bytes`, and `expected_chunks`.
+3. Base64-encode the file and send it in smaller chunks with `append_file_upload_chunk` using `chunk_data_base64` (the older `data_base64` alias is also accepted).
+4. Call `get_file_upload_status` if a chunk upload needs debugging or retry confirmation.
+5. Call `finalize_file_upload`.
+6. Pass the returned `upload_id` or `file_handle` to `preview_data_mapping`.
+7. If needed, include `sheet_name` and `header_row`; `header_row` is 1-based, so Excel row 6 is `header_row: 6`.
+8. Review `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, `sample_normalized_rows`, `canonical_mapped_fields`, and `preserved_metadata_fields`.
+9. Pass the same `upload_id` plus `mapping_id` to `ingest_data`.
 
-Chunks may be slices of one full-file base64 string or independently base64-encoded byte chunks. Independently encoded chunks with padding are decoded chunk-by-chunk before Scout concatenates bytes, so non-final padding does not break finalization. A practical default for remote agents is 100-200 KB of base64 text per append call, with retry checks through `get_file_upload_status`.
+Chunks may be slices of one full-file base64 string or independently base64-encoded byte chunks. Independently encoded chunks with padding are decoded chunk-by-chunk before Scout concatenates bytes, so non-final padding does not break finalization. A practical default for remote agents is 64-128 KB of raw bytes per chunk, with retry checks through `get_file_upload_status`.
+
+Chunk retries are idempotent when `chunk_index` is supplied. Repeating the same index with identical data is accepted as a no-op; repeating it with different data returns a conflict.
 
 Minimal chunked upload payloads:
 
@@ -179,9 +182,10 @@ Useful MCP tools:
 | Tool | Purpose |
 |---|---|
 | `get_canonical_schema` | Returns target fields, required fields, outcome fields, and common aliases. |
+| `recommend_upload_plan` | Returns recommended chunk size/count and canonical remote-upload steps. |
 | `create_file_upload_session` | Starts a chunked upload for `.csv`, `.xls`, or `.xlsx`. |
-| `append_file_upload_chunk` | Appends one base64 chunk. Supports full-string slices or independently encoded chunks. |
-| `get_file_upload_status` | Returns chunk count, received chars/bytes, expected size/chunks, readiness, and finalization status. |
+| `append_file_upload_chunk` | Appends one base64 chunk. Supports full-string slices, independently encoded chunks, and idempotent `chunk_index` retries. |
+| `get_file_upload_status` | Returns chunk count, received indexes, received chars/bytes, expected size/chunks, storage mode, readiness, and finalization status. |
 | `finalize_file_upload` | Decodes the uploaded chunks and returns a reusable `upload_id` / `file_handle`. |
 | `preview_data_mapping` | Returns proposed column mapping, diagnostics, schema, and sample normalized rows before scoring. |
 | `ingest_data` | Scores the finalized upload or file once the mapping has been confirmed. |
@@ -195,6 +199,8 @@ Workbook parsing options accepted by `preview_data_mapping` and `ingest_data`:
 | `sheet_name` | Parse one named sheet, for example `Data Analysis (All)`. |
 | `header_row` | 1-based Excel header row, for example `6` for row 6. |
 | `preserve_columns` | Keep extra source columns as `metadata_<slug>` fields for later filtering or `rank_creatives(group_by=...)`. |
+
+For `.xlsx` files, Scout reads actual worksheet XML when normal pandas/openpyxl loading returns empty or weak columns. It does not rely on workbook dimension metadata such as `<dimension ref>`, `max_row`, or `max_column`. When `header_row` is omitted, Scout scores the first 10 worksheet rows for headers using aliases such as `Creative Name`, `Spends`, `Impressions`, `Platform`, and `Objective`.
 
 Workbook-provided scoring:
 
@@ -338,8 +344,9 @@ All tools return text content. Most structured tools return JSON as the text bod
 
 | Tool | Main Inputs | Purpose |
 |---|---|---|
+| `recommend_upload_plan` | `file_name`, `size_bytes` | Recommends chunk size/count and upload workflow for remote agents. |
 | `create_file_upload_session` | `file_name`, optional `expected_size_bytes`, `expected_chunks`, `mime_type` | Starts a remote upload session. |
-| `append_file_upload_chunk` | `upload_id`, `chunk_data_base64`, optional `chunk_index` | Appends a padding-safe base64 chunk. |
+| `append_file_upload_chunk` | `upload_id`, `chunk_data_base64`, optional `chunk_index` | Appends a padding-safe base64 chunk with idempotent retry semantics. |
 | `get_file_upload_status` | `upload_id` | Reports upload progress and readiness. |
 | `finalize_file_upload` | `upload_id` | Finalizes upload and returns an `upload_id` / `file_handle` for ingest. |
 | `preview_data_mapping` | `upload_id` or small-file `file_data_base64`, optional `sheet_name`, `header_row`, `preserve_columns` | Preview how a CSV/Excel upload maps to the canonical schema. Returns `mapping_id`, `proposed_mapping`, diagnostics, missing fields, ignored columns, preserved metadata, warnings, and sample normalized rows. |

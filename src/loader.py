@@ -7,12 +7,31 @@ import numpy as np
 import re
 import warnings
 
+from src.xlsx_reader import read_xlsx_sheet_dataframe
+
 logger = logging.getLogger(__name__)
 
 
 def _metadata_column_name(source_column: str) -> str:
     slug = re.sub(r"[^0-9a-zA-Z]+", "_", str(source_column).strip().lower()).strip("_")
     return f"metadata_{slug or 'column'}"
+
+
+def _has_header_signal(columns) -> bool:
+    labels = {str(col).strip().lower().replace("\n", " ") for col in columns}
+    return bool(
+        labels
+        & {
+            "creative name",
+            "ad name",
+            "ad name in platform",
+            "platform",
+            "objective",
+            "spends",
+            "spend",
+            "impressions",
+        }
+    )
 
 
 # =============================================================================
@@ -657,6 +676,7 @@ def _load_sheet(
     platform_default: str,
     buying_type: str,
     header: int = 2,
+    df_override: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Load one 'Data Analysis' sheet and normalise to internal schema.
 
@@ -669,7 +689,16 @@ def _load_sheet(
     - '2s VTR' (TikTok) or '3s VTR' (Meta) — both mapped to vtr_2s internally
     - No Wooshi brand measurement columns
     """
-    df = pd.read_excel(xl, sheet_name=sheet_name, header=header)
+    df = df_override if df_override is not None else pd.read_excel(xl, sheet_name=sheet_name, header=header)
+    if df.empty or "Creative Name" not in df.columns or "Impressions" not in df.columns:
+        try:
+            df, _ = read_xlsx_sheet_dataframe(
+                str(xl.io),
+                sheet_name,
+                header_row=None,
+            )
+        except Exception:
+            pass
 
     # Normalise column names: strip whitespace and collapse embedded newlines
     df.columns = [
@@ -1193,15 +1222,37 @@ def _load_selected_excel_sheet(
             f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(xl.sheet_names)}"
         )
 
-    header = (int(header_row) - 1) if header_row is not None else 0
-    df_sheet = pd.read_excel(xl, sheet_name=sheet_name, header=header)
+    detected_header_row = header_row
+    if header_row is None:
+        try:
+            df_sheet, detected_header_row = read_xlsx_sheet_dataframe(filepath, sheet_name)
+        except Exception:
+            df_sheet = pd.read_excel(xl, sheet_name=sheet_name, header=0)
+    else:
+        header = int(header_row) - 1
+        df_sheet = pd.read_excel(xl, sheet_name=sheet_name, header=header)
+        if df_sheet.empty or len(df_sheet.columns) < 3:
+            df_sheet, detected_header_row = read_xlsx_sheet_dataframe(
+                filepath,
+                sheet_name,
+                header_row=header_row,
+            )
     df_sheet.columns = [
         str(c).strip().replace("\n", " ") if c is not None else ""
         for c in df_sheet.columns
     ]
     standard_cols = {"Creative Name", "Impressions", "Spends"}
     if standard_cols.issubset(set(df_sheet.columns)):
-        return [_load_sheet(xl, sheet_name, "Unknown", "Paid", header=header)]
+        return [
+            _load_sheet(
+                xl,
+                sheet_name,
+                "Unknown",
+                "Paid",
+                header=(int(detected_header_row) - 1) if detected_header_row else 0,
+                df_override=df_sheet,
+            )
+        ]
     return _load_unstructured_frames(
         [(sheet_name, df_sheet)],
         column_mapping=column_mapping,

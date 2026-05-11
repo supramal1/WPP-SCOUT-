@@ -3,6 +3,8 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from src.xlsx_reader import read_xlsx_sheet_dataframe
+
 
 TARGET_FIELDS = {
     "ad_name_raw": "The raw name of the ad variant.",
@@ -102,8 +104,10 @@ def get_canonical_schema() -> dict:
         "outcome_fields": OUTCOME_FIELDS,
         "minimum_viable_mapping": REQUIRED_FIELDS,
         "notes": [
-            "Remote MCP agents should upload files by default: create_file_upload_session, append_file_upload_chunk, finalize_file_upload, preview_data_mapping, ingest_data.",
+            "Remote MCP agents should upload files by default: recommend_upload_plan, create_file_upload_session, append_file_upload_chunk, get_file_upload_status, finalize_file_upload, preview_data_mapping, ingest_data.",
             "file_path is only for files already available on the Scout server. Client-local desktop/download paths must be uploaded.",
+            "For large uploads, prefer independently base64-encoded 64-128 KB raw byte chunks with chunk_index for idempotent retries.",
+            "Excel parsing can auto-detect headers across the first 10 XML rows and does not rely on workbook dimension metadata.",
             "Use preview_data_mapping before ingesting non-standard exports.",
             "vtr_2s is the early attention field for 2-second views, 3-second views, or hook rate.",
             "video_views_100 is the completed-view count used for completion-rate metrics.",
@@ -122,6 +126,28 @@ def _confidence_for_mapping(source: str, target: str) -> float:
     if any(part and part in source_words for part in target_words.split()):
         return 0.85
     return 0.8
+
+
+def infer_alias_mapping(df: pd.DataFrame) -> dict[str, str]:
+    """Map obvious canonical/alias columns without using the LLM."""
+    alias_to_field = {}
+    for field, aliases in FIELD_ALIASES.items():
+        keys = [field, field.replace("_", " "), *aliases]
+        for key in keys:
+            alias_to_field[_normalise_label(key)] = field
+
+    mapping = {}
+    seen_targets = set()
+    for column in df.columns:
+        target = alias_to_field.get(_normalise_label(column))
+        if target and target not in seen_targets:
+            mapping[column] = target
+            seen_targets.add(target)
+    return mapping
+
+
+def _normalise_label(value) -> str:
+    return " ".join(str(value or "").strip().replace("\n", " ").replace("_", " ").lower().split())
 
 
 def create_mapping_preview(
@@ -251,7 +277,9 @@ def iter_candidate_dataframes(filepath: str) -> list[tuple[str, pd.DataFrame]]:
     for sheet_name in xl.sheet_names:
         if any(skip in sheet_name.lower() for skip in SKIP_SHEET_TERMS):
             continue
-        df = pd.read_excel(xl, sheet_name=sheet_name)
+        df, _ = read_xlsx_sheet_dataframe(filepath, sheet_name)
+        if df.empty:
+            df = pd.read_excel(xl, sheet_name=sheet_name)
         if not df.empty and len(df.columns) >= 3:
             frames.append((sheet_name, df))
     return frames
@@ -270,8 +298,45 @@ def read_selected_dataframe(
         raise ValueError(
             f"Sheet '{selected_sheet}' not found. Available sheets: {', '.join(xl.sheet_names)}"
         )
+    if header_row is None:
+        try:
+            df, detected_header_row = read_xlsx_sheet_dataframe(filepath, selected_sheet)
+            if not df.empty and len(df.columns) >= 3:
+                df.attrs["detected_header_row"] = detected_header_row
+                return selected_sheet, df
+        except Exception:
+            pass
+
     header = (int(header_row) - 1) if header_row is not None else 0
-    return selected_sheet, pd.read_excel(xl, sheet_name=selected_sheet, header=header)
+    df = pd.read_excel(xl, sheet_name=selected_sheet, header=header)
+    detected_header_row = header_row
+    if df.empty or len(df.columns) < 3 or (
+        header_row is None and not _has_header_signal(df.columns)
+    ):
+        df, detected_header_row = read_xlsx_sheet_dataframe(
+            filepath,
+            selected_sheet,
+            header_row=header_row,
+        )
+    df.attrs["detected_header_row"] = detected_header_row
+    return selected_sheet, df
+
+
+def _has_header_signal(columns) -> bool:
+    labels = {str(col).strip().lower().replace("\n", " ") for col in columns}
+    return bool(
+        labels
+        & {
+            "creative name",
+            "ad name",
+            "ad name in platform",
+            "platform",
+            "objective",
+            "spends",
+            "spend",
+            "impressions",
+        }
+    )
 
 
 def rows_to_dataframe(rows: list[list]) -> pd.DataFrame:
@@ -330,7 +395,9 @@ def create_best_mapping_preview_from_sheets(
 
     previews = []
     for sheet_name, df in iter_candidate_dataframes_from_sheets(sheets):
-        mapping = mapping_provider(df)
+        mapping = infer_alias_mapping(df)
+        if not all(field in mapping.values() for field in REQUIRED_FIELDS):
+            mapping = {**mapping, **mapping_provider(df)}
         previews.append(create_mapping_preview(df, sheet_name, mapping))
 
     if not previews:
@@ -365,14 +432,19 @@ def create_best_mapping_preview(
         else iter_candidate_dataframes(filepath)
     )
     for sheet_name, df in candidates:
-        mapping = mapping_provider(df)
+        mapping = infer_alias_mapping(df)
+        if not all(field in mapping.values() for field in REQUIRED_FIELDS):
+            mapping = {**mapping, **mapping_provider(df)}
+        preview = create_mapping_preview(
+            df,
+            sheet_name,
+            mapping,
+            preserve_columns=preserve_columns,
+        )
+        if df.attrs.get("detected_header_row"):
+            preview["detected_header_row"] = df.attrs["detected_header_row"]
         previews.append(
-            create_mapping_preview(
-                df,
-                sheet_name,
-                mapping,
-                preserve_columns=preserve_columns,
-            )
+            preview
         )
 
     if not previews:

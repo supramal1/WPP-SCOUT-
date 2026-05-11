@@ -1,6 +1,7 @@
 import pandas as pd
+import zipfile
 
-from src.data_mapping import create_mapping_preview
+from src.data_mapping import create_best_mapping_preview, create_mapping_preview
 from src.loader import load_data
 from src.llm_mapper import generate_column_mapping
 
@@ -232,3 +233,192 @@ def test_load_data_uses_explicit_sheet_name_header_row_and_performance_score(tmp
     assert set(df_agg["creative_name"]) == {"Creative A", "Creative B"}
     assert "performance_score" in df_agg.columns
     assert df_agg.loc[df_agg["creative_name"] == "Creative B", "performance_score"].iloc[0] == 91.0
+
+
+def _write_bad_dimension_workbook(path, df):
+    original = path.with_name("original.xlsx")
+    with pd.ExcelWriter(original, engine="openpyxl") as writer:
+        df.to_excel(
+            writer,
+            sheet_name="Data Analysis (All)",
+            startrow=5,
+            index=False,
+        )
+    with zipfile.ZipFile(original, "r") as zin, zipfile.ZipFile(path, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data.replace(b'<dimension ref="A1:O9"/>', b'<dimension ref="A1:A1"/>')
+                data = data.replace(b'<dimension ref="A1:N9"/>', b'<dimension ref="A1:A1"/>')
+            zout.writestr(item, data)
+
+
+def test_preview_auto_detects_xlsx_header_from_xml_when_pandas_empty(monkeypatch, tmp_path):
+    workbook_path = tmp_path / "bad_dimension.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A"],
+            "Platform": ["Meta"],
+            "Objective": ["Awareness"],
+            "Spends": [1000],
+            "Impressions": [30000],
+            "Reach": [20000],
+        }
+    )
+    _write_bad_dimension_workbook(workbook_path, df)
+
+    monkeypatch.setattr("src.data_mapping.pd.read_excel", lambda *args, **kwargs: pd.DataFrame())
+
+    preview = create_best_mapping_preview(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+        mapping_provider=lambda frame: {
+            "Creative Name": "creative_name",
+            "Platform": "platform",
+            "Objective": "objective",
+            "Spends": "spend",
+            "Impressions": "impressions",
+            "Reach": "reach",
+        },
+    )
+
+    assert preview["ready_to_ingest"] is True
+    assert preview["source_columns"][:5] == [
+        "Creative Name",
+        "Platform",
+        "Objective",
+        "Spends",
+        "Impressions",
+    ]
+    assert preview["detected_header_row"] == 6
+
+
+def test_preview_standard_aliases_do_not_require_llm(monkeypatch, tmp_path):
+    workbook_path = tmp_path / "standard_aliases.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A"],
+            "Platform": ["Meta"],
+            "Objective": ["Awareness"],
+            "Spends": [1000],
+            "Impressions": [30000],
+            "Reach": [20000],
+            "Creative Efficiency Index": [88.0],
+            "Concept": ["Concept A"],
+        }
+    )
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        df.to_excel(
+            writer,
+            sheet_name="Data Analysis (All)",
+            startrow=5,
+            index=False,
+        )
+
+    def fail_if_called(_):
+        raise AssertionError("LLM mapper should not be called for standard aliases")
+
+    monkeypatch.setattr("src.llm_mapper.generate_column_mapping", fail_if_called)
+
+    preview = create_best_mapping_preview(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+    )
+
+    assert preview["ready_to_ingest"] is True
+    assert preview["proposed_mapping"]["Creative Name"] == "creative_name"
+    assert preview["proposed_mapping"]["Spends"] == "spend"
+    assert preview["proposed_mapping"]["Creative Efficiency Index"] == "performance_score"
+
+
+def test_preview_auto_header_xlsx_does_not_call_pandas_read_excel(monkeypatch, tmp_path):
+    workbook_path = tmp_path / "standard_aliases.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A"],
+            "Platform": ["Meta"],
+            "Objective": ["Awareness"],
+            "Spends": [1000],
+            "Impressions": [30000],
+            "Reach": [20000],
+        }
+    )
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Data Analysis (All)", startrow=5, index=False)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("selected auto-header xlsx should use XML reader first")
+
+    monkeypatch.setattr("src.data_mapping.pd.read_excel", fail_if_called)
+
+    preview = create_best_mapping_preview(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+    )
+
+    assert preview["ready_to_ingest"] is True
+    assert preview["detected_header_row"] == 6
+
+
+def test_load_data_auto_detects_xlsx_header_from_xml_when_pandas_empty(monkeypatch, tmp_path):
+    workbook_path = tmp_path / "bad_dimension.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A", "Creative B"],
+            "Platform": ["Meta", "TikTok"],
+            "Objective": ["Awareness", "Video Views"],
+            "Format": ["Video", "Video"],
+            "Placement": ["Feed", "In Feed"],
+            "Campaign": ["Campaign 1", "Campaign 2"],
+            "Reach": [20000, 25000],
+            "Impressions": [30000, 40000],
+            "Spends": [1000, 1200],
+            "Creative Efficiency Index": [44.0, 91.0],
+            "Concept": ["Concept A", "Concept B"],
+        }
+    )
+    _write_bad_dimension_workbook(workbook_path, df)
+
+    monkeypatch.setattr("src.loader.pd.read_excel", lambda *args, **kwargs: pd.DataFrame())
+
+    df_raw, df_agg = load_data(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+    )
+
+    assert len(df_raw) == 2
+    assert set(df_agg["creative_name"]) == {"Creative A", "Creative B"}
+    assert df_agg.loc[df_agg["creative_name"] == "Creative B", "performance_score"].iloc[0] == 91.0
+
+
+def test_load_data_auto_header_xlsx_does_not_call_pandas_read_excel(monkeypatch, tmp_path):
+    workbook_path = tmp_path / "standard_aliases.xlsx"
+    df = pd.DataFrame(
+        {
+            "Creative Name": ["Creative A", "Creative B"],
+            "Platform": ["Meta", "TikTok"],
+            "Objective": ["Awareness", "Video Views"],
+            "Format": ["Video", "Video"],
+            "Placement": ["Feed", "In Feed"],
+            "Campaign": ["Campaign 1", "Campaign 2"],
+            "Reach": [20000, 25000],
+            "Impressions": [30000, 40000],
+            "Spends": [1000, 1200],
+            "Creative Efficiency Index": [44.0, 91.0],
+        }
+    )
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Data Analysis (All)", startrow=5, index=False)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("selected auto-header xlsx should use XML reader first")
+
+    monkeypatch.setattr("src.loader.pd.read_excel", fail_if_called)
+
+    df_raw, df_agg = load_data(
+        str(workbook_path),
+        sheet_name="Data Analysis (All)",
+    )
+
+    assert len(df_raw) == 2
+    assert set(df_agg["creative_name"]) == {"Creative A", "Creative B"}

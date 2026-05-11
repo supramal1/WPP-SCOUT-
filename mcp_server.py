@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import hashlib
 import os
 import tempfile
 import json
@@ -59,14 +60,14 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="ingest_data",
-            description="UPLOAD WORKFLOW STEP 5 OF 5: analyze a finalized upload_id. Default remote path is create_file_upload_session -> append_file_upload_chunk -> finalize_file_upload -> preview_data_mapping -> ingest_data. file_path is server-local only; client-local files must be uploaded.",
+            description="UPLOAD WORKFLOW STEP 5 OF 5: analyze a finalized upload_id and return session_id. Default remote path is recommend_upload_plan -> create_file_upload_session -> append_file_upload_chunk -> get_file_upload_status -> finalize_file_upload -> preview_data_mapping -> ingest_data. file_path is server-local only; client-local files must be uploaded.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "upload_id": {"type": "string", "description": "Preferred remote input. Returned by create_file_upload_session/finalize_file_upload."},
                     "file_data_base64": {"type": "string", "description": "Small-file fallback only. Base64 encoded Excel or CSV file."},
                     "file_name": {"type": "string", "description": "e.g., 'data.xlsx'. Required only when file_data_base64 is used."},
-                    "file_path": {"type": "string", "description": "Server-local path only. Do not send a client-local desktop/download path to remote Scout; upload the bytes instead."},
+                    "file_path": {"type": "string", "description": "Advanced/server-local only. Do not send a client-local desktop/download path to remote Scout; upload the bytes instead."},
                     "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
                     "sheet_name": {"type": "string", "description": "Optional Excel sheet to parse, e.g. 'Data Analysis (All)'."},
                     "header_row": {"type": "integer", "description": "Optional 1-based Excel header row, e.g. 6 for row 6."},
@@ -88,14 +89,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="preview_data_mapping",
-            description="UPLOAD WORKFLOW STEP 4 OF 5: preview mapping diagnostics for a finalized upload_id before ingest_data. Supports sheet_name and 1-based header_row. file_path is server-local only.",
+            description="UPLOAD WORKFLOW STEP 4 OF 5: preview mapping diagnostics for a finalized upload_id before ingest_data. Supports sheet_name, 1-based header_row, and automatic header detection. file_path is server-local only.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "upload_id": {"type": "string", "description": "Preferred remote input from finalize_file_upload."},
                     "file_data_base64": {"type": "string", "description": "Small-file fallback only. Base64 encoded Excel or CSV file."},
                     "file_name": {"type": "string", "description": "e.g., 'planner_export.xlsx'. Required only when file_data_base64 is used."},
-                    "file_path": {"type": "string", "description": "Server-local path only. Client-local files must be uploaded."},
+                    "file_path": {"type": "string", "description": "Advanced/server-local only. Client-local files must be uploaded."},
                     "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
                     "sheet_name": {"type": "string", "description": "Optional Excel sheet to parse, e.g. 'Data Analysis (All)'."},
                     "header_row": {"type": "integer", "description": "Optional 1-based Excel header row, e.g. 6 for row 6."},
@@ -109,7 +110,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="create_file_upload_session",
-            description="UPLOAD WORKFLOW STEP 1 OF 5: start remote upload for CSV/XLS/XLSX. Then call append_file_upload_chunk, finalize_file_upload, preview_data_mapping, ingest_data.",
+            description="UPLOAD WORKFLOW STEP 1 OF 5: start remote upload for CSV/XLS/XLSX. Use recommend_upload_plan first for large files; then append chunks, check status, finalize, preview, and ingest.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -123,8 +124,20 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="recommend_upload_plan",
+            description="Return upload-first guidance for remote agents, including recommended chunk size/count and the canonical chunked-upload workflow.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_name": {"type": "string"},
+                    "size_bytes": {"type": "integer"},
+                    "max_raw_chunk_bytes": {"type": "integer", "description": "Optional override; defaults to 98304 bytes."},
+                },
+            },
+        ),
+        Tool(
             name="append_file_upload_chunk",
-            description="UPLOAD WORKFLOW STEP 2 OF 5: append one base64 chunk to an upload session. Then call finalize_file_upload, preview_data_mapping, ingest_data.",
+            description="UPLOAD WORKFLOW STEP 2 OF 5: append one base64 chunk. Prefer 64-128 KB raw byte chunks encoded independently. chunk_index retries are idempotent: identical repeats no-op, different repeats conflict.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -149,7 +162,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_file_upload_status",
-            description="Debug a remote upload session. Returns chunk counts, received chars/bytes, expected size/chunks, readiness, and finalization status.",
+            description="Debug a remote upload session. Returns chunk counts/indexes, received chars/decoded bytes, expected size/chunks, storage mode, readiness, and finalization status.",
             inputSchema={
                 "type": "object",
                 "properties": {"upload_id": {"type": "string"}},
@@ -180,7 +193,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="rank_creatives",
-            description="Post-ingest analysis query. Rank creatives or grouped cohorts by any numeric metric such as composite_score, spend, reach, vtr_2s, engagement_rate, ctr, or workbook-provided performance_score.",
+            description="Post-ingest analysis query. Rank creatives or grouped cohorts by any numeric metric such as composite_score, spend, reach, vtr_2s, engagement_rate, ctr, or workbook-provided performance_score. Pass session_id; omitting it uses active session with a warning unless require_session_id=true.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -193,13 +206,20 @@ async def list_tools() -> list[Tool]:
                     "platform": {"type": "string"},
                     "objective": {"type": "string"},
                     "include_low_confidence": {"type": "boolean", "default": True},
+                    "require_session_id": {"type": "boolean", "default": False},
                 },
             },
         ),
         Tool(
             name="describe_session",
             description="Summarize an analyzed session: row counts, available metrics/grouping fields, platform/objective distributions, mapping context, and warnings.",
-            inputSchema={"type": "object", "properties": {"session_id": {"type": "string"}}},
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "require_session_id": {"type": "boolean", "default": False},
+                },
+            },
         ),
         Tool(
             name="get_top_performers",
@@ -395,16 +415,39 @@ def _json_response(payload: dict) -> list[TextContent]:
 
 
 def _get_session(arguments: dict) -> dict | None:
+    session, _, _ = _resolve_session_context(arguments)
+    return session
+
+
+def _resolve_session_context(arguments: dict) -> tuple[dict | None, str | None, bool]:
     session_id = arguments.get("session_id") or SESSION_STATE.get("active_session_id")
-    if session_id:
-        return SESSION_STATE["sessions"].get(session_id)
+    requested_session_id = arguments.get("session_id")
+    if requested_session_id:
+        return SESSION_STATE["sessions"].get(requested_session_id), requested_session_id, False
+    active_session_id = SESSION_STATE.get("active_session_id")
+    if active_session_id:
+        return SESSION_STATE["sessions"].get(active_session_id), active_session_id, True
     if SESSION_STATE["explained"] is not None:
         return {
             "df": SESSION_STATE["df"],
             "df_raw": SESSION_STATE["df_raw"],
             "explained": SESSION_STATE["explained"],
-        }
-    return None
+            "metadata": {},
+        }, None, True
+    return None, None, False
+
+
+def _session_summary_payload(session: dict, session_id: str | None, used_active: bool) -> dict:
+    explained = session["explained"]
+    return {
+        "session_id": session_id,
+        "used_active_session": used_active,
+        "row_counts": {
+            "scored_creatives": int(len(explained)),
+            "raw_rows": int(len(session.get("df_raw", []))),
+        },
+        "source": session.get("metadata", {}).get("source", {}),
+    }
 
 
 def _safe_number(value):
@@ -489,8 +532,8 @@ def _resolve_input_file(arguments: dict, tmpdir: str) -> Path:
             )
         if not path.exists() or not path.is_file():
             raise ValueError(
-                f"This path is local to the client or unavailable to the remote Scout server: {file_path}. "
-                "Use file upload/base64/chunked upload for remote MCP."
+                f"This is a client-local path or unavailable server path: {file_path}. "
+                "file_path is server-local only. Use create_file_upload_session + append_file_upload_chunk chunks for remote MCP."
             )
         return path
 
@@ -509,6 +552,22 @@ def _resolve_input_file(arguments: dict, tmpdir: str) -> Path:
     tmp_path = Path(tmpdir) / file_name
     tmp_path.write_bytes(file_bytes)
     return tmp_path
+
+
+def _source_metadata(arguments: dict, resolved_path: Path) -> dict:
+    upload_id = arguments.get("upload_id")
+    file_handle = arguments.get("file_handle")
+    if file_handle and not upload_id:
+        upload_id, _ = _resolve_file_handle(file_handle)
+    upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id) if upload_id else None
+    return {
+        "file_name": upload.get("file_name") if upload else resolved_path.name,
+        "upload_id": upload_id,
+        "file_handle": f"upload:{upload_id}" if upload_id else file_handle,
+        "file_path_mode": "upload" if upload_id else ("server-local" if arguments.get("file_path") else "inline-base64"),
+        "sheet_name": arguments.get("sheet_name"),
+        "header_row": arguments.get("header_row"),
+    }
 
 
 async def handle_create_file_upload_session(arguments: dict) -> list[TextContent]:
@@ -536,6 +595,7 @@ async def handle_create_file_upload_session(arguments: dict) -> list[TextContent
         "received_base64_chars": 0,
         "received_bytes": 0,
         "chunk_storage_mode": "decoded_chunks",
+        "chunks_by_index": {},
         "expected_size_bytes": arguments.get("expected_size_bytes") or arguments.get("total_size"),
         "expected_chunks": arguments.get("expected_chunks"),
     }
@@ -546,6 +606,38 @@ async def handle_create_file_upload_session(arguments: dict) -> list[TextContent
             "file_name": file_name,
             "accepted_file_types": sorted(ALLOWED_FILE_SUFFIXES),
             "next_step": "Call append_file_upload_chunk for each base64 chunk, then finalize_file_upload.",
+        }
+    )
+
+
+def handle_recommend_upload_plan(arguments: dict) -> list[TextContent]:
+    file_name = arguments.get("file_name") or "upload.xlsx"
+    size_bytes = int(arguments.get("size_bytes") or 0)
+    raw_chunk_bytes = int(arguments.get("max_raw_chunk_bytes") or 96 * 1024)
+    raw_chunk_bytes = max(64 * 1024, min(raw_chunk_bytes, 128 * 1024))
+    estimated_chunks = (size_bytes + raw_chunk_bytes - 1) // raw_chunk_bytes if size_bytes else None
+    estimated_base64_chars_per_chunk = ((raw_chunk_bytes + 2) // 3) * 4
+    return _json_response(
+        {
+            "status": "ok",
+            "file_name": file_name,
+            "size_bytes": size_bytes or None,
+            "recommended_raw_chunk_bytes": raw_chunk_bytes,
+            "estimated_base64_chars_per_chunk": estimated_base64_chars_per_chunk,
+            "estimated_chunks": estimated_chunks,
+            "workflow": [
+                "create_file_upload_session(file_name, expected_size_bytes, expected_chunks)",
+                "append_file_upload_chunk(upload_id, chunk_index, chunk_data_base64) for each chunk",
+                "get_file_upload_status(upload_id) to verify received chunks/bytes or retry safely",
+                "finalize_file_upload(upload_id)",
+                "preview_data_mapping(upload_id, sheet_name/header_row as needed)",
+                "ingest_data(upload_id, mapping_id as needed)",
+            ],
+            "notes": [
+                "Prefer independently base64-encoded raw byte chunks of 64-128 KB.",
+                "Repeated chunk_index with identical data is accepted as a no-op; different data returns a conflict.",
+                "file_path is server-local only. Client-local files must use upload.",
+            ],
         }
     )
 
@@ -561,10 +653,39 @@ async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
     if not isinstance(chunk, str) or not chunk:
         return _json_response({"status": "error", "message": "chunk_data_base64 is required."})
 
+    chunk = chunk.strip()
+    chunk_index = arguments.get("chunk_index")
+    chunk_hash = hashlib.sha256(chunk.encode("ascii")).hexdigest()
+    if chunk_index is not None:
+        chunk_key = str(chunk_index)
+        existing = upload.setdefault("chunks_by_index", {}).get(chunk_key)
+        if existing:
+            if existing["sha256"] == chunk_hash:
+                return _json_response(
+                    {
+                        "status": "ok",
+                        "upload_id": upload_id,
+                        "duplicate": True,
+                        "chunk_index": chunk_index,
+                        "chunk_count": upload["chunk_count"],
+                        "received_base64_chars": upload["received_base64_chars"],
+                        "received_bytes": upload.get("received_bytes"),
+                        "message": "Chunk already received with identical data; no-op.",
+                    }
+                )
+            return _json_response(
+                {
+                    "status": "error",
+                    "upload_id": upload_id,
+                    "chunk_index": chunk_index,
+                    "message": "Chunk index conflict: this chunk_index was already received with different data.",
+                }
+            )
+
     with open(upload["base64_path"], "a", encoding="ascii") as handle:
-        handle.write(chunk.strip())
+        handle.write(chunk)
     try:
-        chunk_bytes = base64.b64decode(chunk.strip(), validate=True)
+        chunk_bytes = base64.b64decode(chunk, validate=True)
         if upload.get("chunk_storage_mode") != "base64_stream":
             with open(upload["part_path"], "ab") as handle:
                 handle.write(chunk_bytes)
@@ -574,8 +695,13 @@ async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
 
     upload["status"] = "uploading"
     upload["chunk_count"] += 1
-    upload["received_base64_chars"] += len(chunk.strip())
-    upload["last_chunk_index"] = arguments.get("chunk_index")
+    upload["received_base64_chars"] += len(chunk)
+    upload["last_chunk_index"] = chunk_index
+    if chunk_index is not None:
+        upload.setdefault("chunks_by_index", {})[str(chunk_index)] = {
+            "sha256": chunk_hash,
+            "base64_chars": len(chunk),
+        }
     return _json_response(
         {
             "status": "ok",
@@ -594,8 +720,9 @@ def _upload_status_payload(upload_id: str, upload: dict) -> dict:
     ready_by_chunks = expected_chunks is None or int(expected_chunks) == int(upload.get("chunk_count", 0))
     ready_by_size = (
         expected_size is None
+        or upload.get("chunk_storage_mode") == "base64_stream"
         or received_bytes is None
-        or int(expected_size) == int(received_bytes)
+        or int(expected_size) == int(received_bytes or 0)
     )
     return {
         "status": upload.get("status"),
@@ -608,6 +735,10 @@ def _upload_status_payload(upload_id: str, upload: dict) -> dict:
         "expected_size_bytes": expected_size,
         "expected_chunks": expected_chunks,
         "last_chunk_index": upload.get("last_chunk_index"),
+        "received_chunk_indexes": sorted(
+            int(index) if str(index).isdigit() else index
+            for index in upload.get("chunks_by_index", {})
+        ),
         "chunk_storage_mode": upload.get("chunk_storage_mode"),
         "ready_to_finalize": upload.get("status") in {"uploading", "created"} and ready_by_chunks and ready_by_size,
         "finalized": upload.get("status") == "finalized",
@@ -682,6 +813,7 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             tmp_path = _resolve_input_file(arguments, tmpdir)
+            source = _source_metadata(arguments, tmp_path)
             df_raw, df = load_data(
                 str(tmp_path),
                 column_mapping=column_mapping,
@@ -706,9 +838,13 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
                 "explained": explained,
                 "metadata": {
                     "mapping_id": mapping_id,
+                    "source": source,
                     "sheet_name": arguments.get("sheet_name"),
                     "header_row": arguments.get("header_row"),
                     "preserve_columns": arguments.get("preserve_columns") or [],
+                    "preserved_metadata_fields": [
+                        col for col in df.columns if col.startswith("metadata_")
+                    ],
                     "mapped_fields": column_mapping or {},
                 },
             }
@@ -742,7 +878,11 @@ async def handle_mapping_preview(arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"Mapping preview failed: {str(e)}")]
 
 
-def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[TextContent]:
+def handle_rank_creatives(
+    arguments: dict,
+    explained: pd.DataFrame,
+    session_context: dict | None = None,
+) -> list[TextContent]:
     metric = arguments.get("metric") or "composite_score"
     group_by = arguments.get("group_by")
     top_n = int(arguments.get("top_n", 10))
@@ -829,11 +969,19 @@ def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[Text
     top = ranked_output.sort_values(metric, ascending=False).head(top_n)
     bottom = ranked_output.sort_values(metric, ascending=True).head(bottom_n)
 
+    warnings = []
+    if session_context and session_context.get("used_active_session"):
+        warnings.append(
+            "session_id was omitted; Scout used the active session. Pass session_id or require_session_id=true for strict agents."
+        )
+
     return _json_response(
         {
             "status": "ok",
             "metric": metric,
             "group_by": group_by,
+            "session": session_context,
+            "warnings": warnings,
             "filters": {
                 "min_spend": min_spend,
                 "platform": platform,
@@ -897,7 +1045,9 @@ def handle_describe_session(session: dict) -> list[TextContent]:
             }
             if "objective_normalized" in explained.columns
             else {},
+            "source": metadata.get("source", {}),
             "mapping": metadata,
+            "preserved_metadata_fields": metadata.get("preserved_metadata_fields", []),
             "warnings": warnings,
         }
     )
@@ -911,6 +1061,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await handle_mapping_preview(arguments)
     if name == "create_file_upload_session":
         return await handle_create_file_upload_session(arguments)
+    if name == "recommend_upload_plan":
+        return handle_recommend_upload_plan(arguments)
     if name == "append_file_upload_chunk":
         return await handle_append_file_upload_chunk(arguments)
     if name == "finalize_file_upload":
@@ -920,10 +1072,23 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "get_canonical_schema":
         return _json_response(get_canonical_schema())
 
+    if arguments.get("require_session_id") and not arguments.get("session_id"):
+        return _json_response(
+            {
+                "status": "error",
+                "message": "session_id is required when require_session_id=true.",
+            }
+        )
+
     # Check if data exists for query tools
-    session = _get_session(arguments)
+    session, resolved_session_id, used_active_session = _resolve_session_context(arguments)
     if session is None:
         return [TextContent(type="text", text="No data has been analyzed yet. Please use the 'ingest_data' tool first.")]
+    session_context = _session_summary_payload(
+        session,
+        resolved_session_id,
+        used_active_session,
+    )
 
     explained = session["explained"]
     df_raw = session["df_raw"]
@@ -944,7 +1109,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(_format_creative_list(top), indent=2))]
 
         elif name == "rank_creatives":
-            return handle_rank_creatives(arguments, explained)
+            return handle_rank_creatives(arguments, explained, session_context)
 
         elif name == "describe_session":
             return handle_describe_session(session)

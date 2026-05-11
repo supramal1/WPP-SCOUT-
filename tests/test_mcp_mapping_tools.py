@@ -286,12 +286,71 @@ def test_mcp_chunked_upload_accepts_independently_encoded_padded_chunks(tmp_path
     assert finalized["received_bytes"] == len(file_bytes)
 
 
+def test_mcp_chunked_upload_is_idempotent_by_chunk_index(tmp_path):
+    file_bytes = b"abcdef"
+    first_chunk = base64.b64encode(file_bytes[:3]).decode("ascii")
+    conflicting_chunk = base64.b64encode(b"xyz").decode("ascii")
+    SESSION_STATE["uploads"] = {}
+
+    create_response = asyncio.run(
+        call_tool(
+            "create_file_upload_session",
+            {"file_name": "planner_export.xlsx", "expected_size_bytes": len(file_bytes)},
+        )
+    )
+    upload_id = json.loads(create_response[0].text)["upload_id"]
+
+    first_response = asyncio.run(
+        call_tool(
+            "append_file_upload_chunk",
+            {"upload_id": upload_id, "chunk_index": 0, "chunk_data_base64": first_chunk},
+        )
+    )
+    repeat_response = asyncio.run(
+        call_tool(
+            "append_file_upload_chunk",
+            {"upload_id": upload_id, "chunk_index": 0, "chunk_data_base64": first_chunk},
+        )
+    )
+    conflict_response = asyncio.run(
+        call_tool(
+            "append_file_upload_chunk",
+            {"upload_id": upload_id, "chunk_index": 0, "chunk_data_base64": conflicting_chunk},
+        )
+    )
+
+    assert json.loads(first_response[0].text)["status"] == "ok"
+    repeat = json.loads(repeat_response[0].text)
+    conflict = json.loads(conflict_response[0].text)
+    assert repeat["status"] == "ok"
+    assert repeat["duplicate"] is True
+    assert repeat["chunk_count"] == 1
+    assert conflict["status"] == "error"
+    assert "conflict" in conflict["message"].lower()
+
+
+def test_mcp_recommends_upload_plan_for_large_files():
+    response = asyncio.run(
+        call_tool(
+            "recommend_upload_plan",
+            {"file_name": "campaign.xlsx", "size_bytes": 8_225_731},
+        )
+    )
+    plan = json.loads(response[0].text)
+
+    assert plan["status"] == "ok"
+    assert 64 * 1024 <= plan["recommended_raw_chunk_bytes"] <= 128 * 1024
+    assert plan["estimated_chunks"] > 1
+    assert "create_file_upload_session" in plan["workflow"][0]
+
+
 def test_mcp_exposes_canonical_schema_tool():
     tools = asyncio.run(list_tools())
     tool_names = {tool.name for tool in tools}
     assert "get_canonical_schema" in tool_names
     assert "get_file_upload_status" in tool_names
     assert "describe_session" in tool_names
+    assert "recommend_upload_plan" in tool_names
 
     schema_response = asyncio.run(call_tool("get_canonical_schema", {}))
     schema = json.loads(schema_response[0].text)
@@ -453,6 +512,45 @@ def test_mcp_describe_session_reports_metrics_and_distributions(tmp_path):
     assert summary["platform_distribution"]["Meta"] == 2
     assert summary["objective_distribution"]["Awareness"] == 2
     assert "concept" in summary["available_group_by_fields"]
+    assert summary["source"]["file_name"] == "offset_workbook.xlsx"
+    assert summary["source"]["sheet_name"] == "Data Analysis (All)"
+    assert summary["source"]["header_row"] == 6
+
+
+def test_mcp_query_tools_warn_or_require_explicit_session(tmp_path):
+    workbook_path = tmp_path / "offset_workbook.xlsx"
+    _write_offset_sheet(workbook_path, _standard_sheet_df())
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    active_response = asyncio.run(
+        call_tool("rank_creatives", {"metric": "spend", "top_n": 1, "bottom_n": 0})
+    )
+    strict_response = asyncio.run(
+        call_tool(
+            "rank_creatives",
+            {"metric": "spend", "require_session_id": True},
+        )
+    )
+    active = json.loads(active_response[0].text)
+    strict = json.loads(strict_response[0].text)
+
+    assert ingest["session_id"]
+    assert active["status"] == "ok"
+    assert active["session"]["used_active_session"] is True
+    assert active["warnings"]
+    assert strict["status"] == "error"
+    assert "session_id" in strict["message"]
 
 
 def test_mcp_file_path_error_explains_remote_upload_default():
@@ -463,5 +561,6 @@ def test_mcp_file_path_error_explains_remote_upload_default():
         )
     )
 
-    assert "This path is local to the client" in response[0].text
-    assert "chunked upload" in response[0].text
+    assert "client-local path" in response[0].text
+    assert "file_path is server-local only" in response[0].text
+    assert "create_file_upload_session" in response[0].text

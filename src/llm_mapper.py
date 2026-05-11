@@ -32,6 +32,9 @@ TARGET_FIELDS = {
     "asset_type_raw": "Granular asset type (e.g., BAU, Creator, Partner).",
     "os_target": "Operating system targeted (e.g., iOS, Android, All).",
     "audience_segment": "Audience or targeting segment.",
+    "concept": "Creative concept rollup label. If absent, creative_name is used.",
+    "product": "Product or product family label.",
+    "wave": "Campaign wave or flight label.",
     "performance_score": "Workbook-provided score or performance index to preserve alongside Scout's composite_score.",
 }
 
@@ -155,6 +158,9 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
             "buying_type": ["buying", "method", "type"],
             "format_raw": ["format"],
             "os_target": ["os", "operating"],
+            "concept": ["concept", "creative territory", "idea"],
+            "product": ["product", "product family"],
+            "wave": ["wave", "flight", "phase"],
             "cpm": ["cpm"],
             "engagements": ["engagement", "interaction"],
             "shares": ["share"],

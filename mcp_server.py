@@ -73,6 +73,11 @@ async def list_tools() -> list[Tool]:
                     "min_spend": {"type": "number", "default": 500},
                     "min_reach": {"type": "number", "default": 10000},
                     "mapping_id": {"type": "string", "description": "Mapping preview ID returned by preview_data_mapping."},
+                    "preserve_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional source columns to retain as metadata_<slug> fields for filtering/grouping when they are outside the canonical schema.",
+                    },
                     "column_mapping": {
                         "type": "object",
                         "description": "Explicit mapping from source column names to WPP Scout canonical fields.",
@@ -94,6 +99,11 @@ async def list_tools() -> list[Tool]:
                     "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
                     "sheet_name": {"type": "string", "description": "Optional Excel sheet to parse, e.g. 'Data Analysis (All)'."},
                     "header_row": {"type": "integer", "description": "Optional 1-based Excel header row, e.g. 6 for row 6."},
+                    "preserve_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional source columns to retain as metadata rather than report as ignored.",
+                    },
                 }
             }
         ),
@@ -138,6 +148,15 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_file_upload_status",
+            description="Debug a remote upload session. Returns chunk counts, received chars/bytes, expected size/chunks, readiness, and finalization status.",
+            inputSchema={
+                "type": "object",
+                "properties": {"upload_id": {"type": "string"}},
+                "required": ["upload_id"],
+            },
+        ),
+        Tool(
             name="get_canonical_schema",
             description="Returns WPP Scout's canonical campaign schema, required fields, outcome fields, custom performance_score field, common aliases, and upload-first workflow guidance.",
             inputSchema={"type": "object", "properties": {}},
@@ -155,6 +174,7 @@ async def list_tools() -> list[Tool]:
                     "upload_id": {"type": "string"},
                     "sheet_name": {"type": "string"},
                     "header_row": {"type": "integer"},
+                    "preserve_columns": {"type": "array", "items": {"type": "string"}},
                 }
             }
         ),
@@ -175,6 +195,11 @@ async def list_tools() -> list[Tool]:
                     "include_low_confidence": {"type": "boolean", "default": True},
                 },
             },
+        ),
+        Tool(
+            name="describe_session",
+            description="Summarize an analyzed session: row counts, available metrics/grouping fields, platform/objective distributions, mapping context, and warnings.",
+            inputSchema={"type": "object", "properties": {"session_id": {"type": "string"}}},
         ),
         Tool(
             name="get_top_performers",
@@ -397,6 +422,16 @@ def _safe_number(value):
     return value
 
 
+def _unique_columns(columns: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for col in columns:
+        if col not in seen:
+            unique.append(col)
+            seen.add(col)
+    return unique
+
+
 def _upload_root() -> Path:
     root = Path(os.environ.get("WPP_SCOUT_UPLOAD_DIR", "/tmp/wpp-scout-uploads"))
     root.mkdir(parents=True, exist_ok=True)
@@ -486,16 +521,21 @@ async def handle_create_file_upload_session(arguments: dict) -> list[TextContent
     upload_dir = _upload_root() / upload_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     base64_path = upload_dir / f"{file_name}.b64"
+    part_path = upload_dir / f"{file_name}.part"
     final_path = upload_dir / file_name
     base64_path.write_text("")
+    part_path.write_bytes(b"")
     SESSION_STATE.setdefault("uploads", {})[upload_id] = {
         "status": "created",
         "file_name": file_name,
         "mime_type": arguments.get("mime_type"),
         "base64_path": str(base64_path),
+        "part_path": str(part_path),
         "file_path": str(final_path),
         "chunk_count": 0,
         "received_base64_chars": 0,
+        "received_bytes": 0,
+        "chunk_storage_mode": "decoded_chunks",
         "expected_size_bytes": arguments.get("expected_size_bytes") or arguments.get("total_size"),
         "expected_chunks": arguments.get("expected_chunks"),
     }
@@ -523,6 +563,14 @@ async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
 
     with open(upload["base64_path"], "a", encoding="ascii") as handle:
         handle.write(chunk.strip())
+    try:
+        chunk_bytes = base64.b64decode(chunk.strip(), validate=True)
+        if upload.get("chunk_storage_mode") != "base64_stream":
+            with open(upload["part_path"], "ab") as handle:
+                handle.write(chunk_bytes)
+            upload["received_bytes"] = int(upload.get("received_bytes", 0)) + len(chunk_bytes)
+    except Exception:
+        upload["chunk_storage_mode"] = "base64_stream"
 
     upload["status"] = "uploading"
     upload["chunk_count"] += 1
@@ -534,8 +582,45 @@ async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
             "upload_id": upload_id,
             "chunk_count": upload["chunk_count"],
             "received_base64_chars": upload["received_base64_chars"],
+            "received_bytes": upload.get("received_bytes"),
         }
     )
+
+
+def _upload_status_payload(upload_id: str, upload: dict) -> dict:
+    expected_size = upload.get("expected_size_bytes")
+    expected_chunks = upload.get("expected_chunks")
+    received_bytes = upload.get("received_bytes")
+    ready_by_chunks = expected_chunks is None or int(expected_chunks) == int(upload.get("chunk_count", 0))
+    ready_by_size = (
+        expected_size is None
+        or received_bytes is None
+        or int(expected_size) == int(received_bytes)
+    )
+    return {
+        "status": upload.get("status"),
+        "upload_id": upload_id,
+        "file_name": upload.get("file_name"),
+        "mime_type": upload.get("mime_type"),
+        "chunk_count": int(upload.get("chunk_count", 0)),
+        "received_base64_chars": int(upload.get("received_base64_chars", 0)),
+        "received_bytes": received_bytes,
+        "expected_size_bytes": expected_size,
+        "expected_chunks": expected_chunks,
+        "last_chunk_index": upload.get("last_chunk_index"),
+        "chunk_storage_mode": upload.get("chunk_storage_mode"),
+        "ready_to_finalize": upload.get("status") in {"uploading", "created"} and ready_by_chunks and ready_by_size,
+        "finalized": upload.get("status") == "finalized",
+        "error": upload.get("error"),
+    }
+
+
+async def handle_get_file_upload_status(arguments: dict) -> list[TextContent]:
+    upload_id = arguments.get("upload_id")
+    upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id)
+    if upload is None:
+        return _json_response({"status": "error", "message": f"Unknown upload_id: {upload_id}"})
+    return _json_response(_upload_status_payload(upload_id, upload))
 
 
 async def handle_finalize_file_upload(arguments: dict) -> list[TextContent]:
@@ -545,8 +630,17 @@ async def handle_finalize_file_upload(arguments: dict) -> list[TextContent]:
         return _json_response({"status": "error", "message": f"Unknown upload_id: {upload_id}"})
 
     try:
-        encoded = Path(upload["base64_path"]).read_text(encoding="ascii")
-        file_bytes = base64.b64decode(encoded, validate=True)
+        part_path = Path(upload.get("part_path", ""))
+        if upload.get("chunk_storage_mode") == "decoded_chunks" and part_path.exists():
+            file_bytes = part_path.read_bytes()
+        else:
+            encoded = Path(upload["base64_path"]).read_text(encoding="ascii")
+            file_bytes = base64.b64decode(encoded, validate=True)
+        expected_size = upload.get("expected_size_bytes")
+        if expected_size is not None and int(expected_size) != len(file_bytes):
+            raise ValueError(
+                f"Decoded upload size {len(file_bytes)} did not match expected_size_bytes {expected_size}."
+            )
         final_path = Path(upload["file_path"])
         final_path.write_bytes(file_bytes)
     except Exception as e:
@@ -579,6 +673,11 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
         if preview is None:
             return [TextContent(type="text", text=f"Unknown mapping_id: {mapping_id}")]
         column_mapping = preview.get("proposed_mapping")
+        if not arguments.get("preserve_columns"):
+            arguments = {
+                **arguments,
+                "preserve_columns": preview.get("preserved_custom_columns", []),
+            }
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
@@ -588,6 +687,7 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
                 column_mapping=column_mapping,
                 sheet_name=arguments.get("sheet_name"),
                 header_row=arguments.get("header_row"),
+                preserve_columns=arguments.get("preserve_columns"),
             )
             df['low_confidence'] = (df['spend'] < float(min_spend)) | (df['reach'] < float(min_reach))
             scored = score_creatives(df)
@@ -604,6 +704,13 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
                 "df": df,
                 "df_raw": df_raw_scored,
                 "explained": explained,
+                "metadata": {
+                    "mapping_id": mapping_id,
+                    "sheet_name": arguments.get("sheet_name"),
+                    "header_row": arguments.get("header_row"),
+                    "preserve_columns": arguments.get("preserve_columns") or [],
+                    "mapped_fields": column_mapping or {},
+                },
             }
             
             return _json_response({
@@ -624,6 +731,7 @@ async def handle_mapping_preview(arguments: dict) -> list[TextContent]:
                 str(tmp_path),
                 sheet_name=arguments.get("sheet_name"),
                 header_row=arguments.get("header_row"),
+                preserve_columns=arguments.get("preserve_columns"),
             )
             mapping_id = str(uuid.uuid4())
             preview = {**preview, "mapping_id": mapping_id}
@@ -677,22 +785,22 @@ def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[Text
             return _json_response(
                 {"status": "error", "message": f"group_by '{group_by}' not found."}
             )
+        group_aggs = {
+            "spend": ("spend", "sum"),
+            "reach": ("reach", "sum"),
+            "impressions": ("impressions", "sum"),
+            "creative_rows": ("creative_name", "count"),
+            "platforms": ("platform", lambda x: sorted(set(x.dropna()))),
+            "objectives": (
+                "objective_normalized",
+                lambda x: sorted(set(x.dropna())),
+            ),
+        }
+        if metric not in group_aggs:
+            group_aggs[metric] = (metric, "mean")
         grouped = (
             ranked.groupby(group_by, dropna=False)
-            .agg(
-                **{
-                    metric: (metric, "mean"),
-                    "spend": ("spend", "sum"),
-                    "reach": ("reach", "sum"),
-                    "impressions": ("impressions", "sum"),
-                    "creative_rows": ("creative_name", "count"),
-                    "platforms": ("platform", lambda x: sorted(set(x.dropna()))),
-                    "objectives": (
-                        "objective_normalized",
-                        lambda x: sorted(set(x.dropna())),
-                    ),
-                }
-            )
+            .agg(**group_aggs)
             .reset_index()
         )
         ranked_output = grouped
@@ -712,7 +820,11 @@ def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[Text
             "low_confidence",
             metric,
         ]
-        ranked_output = ranked[[col for col in keep_cols if col in ranked.columns]]
+        if group_by and group_by in ranked.columns:
+            keep_cols.append(group_by)
+        ranked_output = ranked[
+            _unique_columns([col for col in keep_cols if col in ranked.columns])
+        ]
 
     top = ranked_output.sort_values(metric, ascending=False).head(top_n)
     bottom = ranked_output.sort_values(metric, ascending=True).head(bottom_n)
@@ -742,6 +854,54 @@ def handle_rank_creatives(arguments: dict, explained: pd.DataFrame) -> list[Text
         }
     )
 
+
+def handle_describe_session(session: dict) -> list[TextContent]:
+    explained = session["explained"]
+    df_raw = session["df_raw"]
+    metadata = session.get("metadata", {})
+
+    numeric_metrics = sorted(
+        col for col in explained.columns if pd.api.types.is_numeric_dtype(explained[col])
+    )
+    group_fields = sorted(
+        col
+        for col in explained.columns
+        if not pd.api.types.is_numeric_dtype(explained[col])
+        or col in {"concept", "platform", "objective_normalized", "format_canonical", "placement_canonical", "asset_type_canonical", "os_target", "rows_rolled_up"}
+        or col.startswith("metadata_")
+    )
+
+    warnings = []
+    low_confidence_count = int(explained.get("low_confidence", pd.Series(dtype=bool)).sum())
+    if low_confidence_count:
+        warnings.append(f"{low_confidence_count} low-confidence creative(s) need more data.")
+
+    return _json_response(
+        {
+            "status": "ok",
+            "row_counts": {
+                "raw_rows": int(len(df_raw)),
+                "scored_creatives": int(len(explained)),
+            },
+            "available_numeric_metrics": numeric_metrics,
+            "available_group_by_fields": group_fields,
+            "platform_distribution": {
+                str(key): int(value)
+                for key, value in explained["platform"].value_counts(dropna=False).to_dict().items()
+            }
+            if "platform" in explained.columns
+            else {},
+            "objective_distribution": {
+                str(key): int(value)
+                for key, value in explained["objective_normalized"].value_counts(dropna=False).to_dict().items()
+            }
+            if "objective_normalized" in explained.columns
+            else {},
+            "mapping": metadata,
+            "warnings": warnings,
+        }
+    )
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # Ingest tools don't need existing data
@@ -755,6 +915,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await handle_append_file_upload_chunk(arguments)
     if name == "finalize_file_upload":
         return await handle_finalize_file_upload(arguments)
+    if name == "get_file_upload_status":
+        return await handle_get_file_upload_status(arguments)
     if name == "get_canonical_schema":
         return _json_response(get_canonical_schema())
 
@@ -783,6 +945,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         elif name == "rank_creatives":
             return handle_rank_creatives(arguments, explained)
+
+        elif name == "describe_session":
+            return handle_describe_session(session)
 
         elif name == "get_bottom_performers":
             limit = arguments.get("limit", 10)

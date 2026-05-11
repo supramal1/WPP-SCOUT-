@@ -10,6 +10,11 @@ import warnings
 logger = logging.getLogger(__name__)
 
 
+def _metadata_column_name(source_column: str) -> str:
+    slug = re.sub(r"[^0-9a-zA-Z]+", "_", str(source_column).strip().lower()).strip("_")
+    return f"metadata_{slug or 'column'}"
+
+
 # =============================================================================
 # FORMAT MAPPINGS — Creative asset type, separate from placement
 # =============================================================================
@@ -872,6 +877,9 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "product": "first",
         "wave": "first",
     }
+    for col in df.columns:
+        if col.startswith("metadata_") and col not in group_cols:
+            first_cols[col] = "first"
 
     sum_cols = {
         "spend": "sum",
@@ -920,6 +928,7 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
     }
     agg = df.groupby(group_cols, as_index=False).agg(agg_dict)
     agg = agg.rename(columns={"ad_id": "n_variants", "campaign_name": "n_campaigns"})
+    agg["rows_rolled_up"] = agg["n_variants"]
     agg = agg.merge(vtr_agg, on=group_cols, how="left")
 
     agg["frequency"] = agg["impressions"] / agg["reach"].replace(0, float("nan"))
@@ -1017,7 +1026,9 @@ def compute_audience_consistency(
 
 
 def normalize_unstructured_dataframe(
-    df_sheet: pd.DataFrame, column_mapping: dict[str, str]
+    df_sheet: pd.DataFrame,
+    column_mapping: dict[str, str],
+    preserve_columns: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """Normalize a mapped non-standard export into WPP Scout's internal schema."""
     mapped_df = df_sheet.rename(columns=column_mapping)
@@ -1133,12 +1144,18 @@ def normalize_unstructured_dataframe(
 
     normalized = normalized[normalized["creative_name"] != "Unknown Creative"]
     normalized = normalized[(normalized["spend"] > 0) | (normalized["impressions"] > 0)]
+    for source_column in preserve_columns or []:
+        if source_column not in df_sheet.columns or source_column in column_mapping:
+            continue
+        metadata_column = _metadata_column_name(source_column)
+        normalized[metadata_column] = df_sheet.loc[normalized.index, source_column].astype(str)
     return normalized
 
 
 def _load_unstructured_frames(
     candidates: list[tuple[str, pd.DataFrame]],
     column_mapping: Optional[dict[str, str]] = None,
+    preserve_columns: Optional[list[str]] = None,
 ) -> list[pd.DataFrame]:
     frames = []
     if column_mapping is None:
@@ -1153,7 +1170,11 @@ def _load_unstructured_frames(
         if df_sheet.empty or len(df_sheet.columns) < 3:
             continue
         mapping = column_mapping or generate_column_mapping(df_sheet)
-        normalized = normalize_unstructured_dataframe(df_sheet, mapping)
+        normalized = normalize_unstructured_dataframe(
+            df_sheet,
+            mapping,
+            preserve_columns=preserve_columns,
+        )
         if not normalized.empty:
             frames.append(normalized)
     return frames
@@ -1164,6 +1185,7 @@ def _load_selected_excel_sheet(
     sheet_name: str,
     header_row: Optional[int] = None,
     column_mapping: Optional[dict[str, str]] = None,
+    preserve_columns: Optional[list[str]] = None,
 ) -> list[pd.DataFrame]:
     xl = pd.ExcelFile(filepath)
     if sheet_name not in xl.sheet_names:
@@ -1181,7 +1203,9 @@ def _load_selected_excel_sheet(
     if standard_cols.issubset(set(df_sheet.columns)):
         return [_load_sheet(xl, sheet_name, "Unknown", "Paid", header=header)]
     return _load_unstructured_frames(
-        [(sheet_name, df_sheet)], column_mapping=column_mapping
+        [(sheet_name, df_sheet)],
+        column_mapping=column_mapping,
+        preserve_columns=preserve_columns,
     )
 
 
@@ -1190,6 +1214,7 @@ def load_data(
     column_mapping: Optional[dict[str, str]] = None,
     sheet_name: Optional[str] = None,
     header_row: Optional[int] = None,
+    preserve_columns: Optional[list[str]] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load Excel file and return (df_raw, df_agg).
 
@@ -1221,7 +1246,9 @@ def load_data(
     if path.suffix.lower() == ".csv":
         frames.extend(
             _load_unstructured_frames(
-                [(path.stem, pd.read_csv(filepath))], column_mapping=column_mapping
+                [(path.stem, pd.read_csv(filepath))],
+                column_mapping=column_mapping,
+                preserve_columns=preserve_columns,
             )
         )
     elif sheet_name:
@@ -1231,6 +1258,7 @@ def load_data(
                 sheet_name=sheet_name,
                 header_row=header_row,
                 column_mapping=column_mapping,
+                preserve_columns=preserve_columns,
             )
         )
     else:
@@ -1249,7 +1277,9 @@ def load_data(
 
             frames.extend(
                 _load_unstructured_frames(
-                    iter_candidate_dataframes(filepath), column_mapping=column_mapping
+                    iter_candidate_dataframes(filepath),
+                    column_mapping=column_mapping,
+                    preserve_columns=preserve_columns,
                 )
             )
 

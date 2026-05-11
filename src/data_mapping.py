@@ -35,6 +35,19 @@ TARGET_FIELDS = {
 
 REQUIRED_FIELDS = ["creative_name", "platform", "objective", "spend", "impressions"]
 OUTCOME_FIELDS = ["reach", "clicks", "vtr_2s", "video_views_100", "engagements", "shares"]
+METADATA_FIELDS = {
+    "ad_name_raw",
+    "format_raw",
+    "placement_raw",
+    "campaign_raw",
+    "buying_type",
+    "asset_type_raw",
+    "os_target",
+    "audience_segment",
+    "concept",
+    "product",
+    "wave",
+}
 SKIP_SHEET_TERMS = ("methodology", "summary", "looker", "rankings")
 
 FIELD_ALIASES = {
@@ -112,7 +125,10 @@ def _confidence_for_mapping(source: str, target: str) -> float:
 
 
 def create_mapping_preview(
-    df: pd.DataFrame, sheet_name: str, mapping: dict[str, str]
+    df: pd.DataFrame,
+    sheet_name: str,
+    mapping: dict[str, str],
+    preserve_columns: list[str] | None = None,
 ) -> dict:
     """Build an auditable preview for a proposed source-column mapping."""
     valid_mapping = {
@@ -121,6 +137,16 @@ def create_mapping_preview(
         if source in df.columns and target in TARGET_FIELDS
     }
     mapped_targets = set(valid_mapping.values())
+    for source in df.columns:
+        if source in TARGET_FIELDS and source not in valid_mapping and source not in mapped_targets:
+            valid_mapping[source] = source
+            mapped_targets.add(source)
+
+    mapped_targets = set(valid_mapping.values())
+    preserve_columns = preserve_columns or []
+    preserved_custom_columns = [
+        source for source in preserve_columns if source in df.columns and source not in valid_mapping
+    ]
 
     mapped_df = df.rename(columns=valid_mapping)
     sample_cols = [field for field in TARGET_FIELDS if field in mapped_df.columns]
@@ -185,6 +211,8 @@ def create_mapping_preview(
             field for field in OUTCOME_FIELDS if field in mapped_targets
         ),
     }
+    canonical_mapped_fields = sorted(mapped_targets - METADATA_FIELDS)
+    preserved_metadata_fields = sorted(mapped_targets & METADATA_FIELDS)
 
     return {
         "sheet_name": sheet_name,
@@ -194,9 +222,16 @@ def create_mapping_preview(
         "mapping_diagnostics": mapping_diagnostics,
         "confidence_by_field": confidence_by_field,
         "field_coverage": field_coverage,
+        "canonical_mapped_fields": canonical_mapped_fields,
+        "preserved_metadata_fields": preserved_metadata_fields,
+        "preserved_custom_columns": preserved_custom_columns,
         "missing_required_fields": missing_required,
         "ambiguous_targets": ambiguous_targets,
-        "ignored_columns": [col for col in df.columns if col not in valid_mapping],
+        "ignored_columns": [
+            col
+            for col in df.columns
+            if col not in valid_mapping and col not in preserved_custom_columns
+        ],
         "sample_normalized_rows": sample_rows,
         "canonical_schema": get_canonical_schema(),
         "warnings": warnings,
@@ -315,6 +350,7 @@ def create_best_mapping_preview(
     mapping_provider: Optional[Callable[[pd.DataFrame], dict[str, str]]] = None,
     sheet_name: str | None = None,
     header_row: int | None = None,
+    preserve_columns: list[str] | None = None,
 ) -> dict:
     """Create the highest-coverage mapping preview for an uploaded file."""
     if mapping_provider is None:
@@ -330,7 +366,14 @@ def create_best_mapping_preview(
     )
     for sheet_name, df in candidates:
         mapping = mapping_provider(df)
-        previews.append(create_mapping_preview(df, sheet_name, mapping))
+        previews.append(
+            create_mapping_preview(
+                df,
+                sheet_name,
+                mapping,
+                preserve_columns=preserve_columns,
+            )
+        )
 
     if not previews:
         raise ValueError("No data-bearing sheets or CSV rows found to map.")

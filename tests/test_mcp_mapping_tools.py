@@ -239,9 +239,59 @@ def test_mcp_chunked_upload_can_preview_and_ingest(monkeypatch, tmp_path):
     assert ingest["creatives_analyzed"] == 2
 
 
+def test_mcp_chunked_upload_accepts_independently_encoded_padded_chunks(tmp_path):
+    file_bytes = b"abcde"
+    SESSION_STATE["uploads"] = {}
+
+    create_response = asyncio.run(
+        call_tool(
+            "create_file_upload_session",
+            {
+                "file_name": "planner_export.xlsx",
+                "expected_size_bytes": len(file_bytes),
+                "expected_chunks": 2,
+            },
+        )
+    )
+    upload = json.loads(create_response[0].text)
+    upload_id = upload["upload_id"]
+
+    chunks = [
+        base64.b64encode(file_bytes[:2]).decode("ascii"),
+        base64.b64encode(file_bytes[2:]).decode("ascii"),
+    ]
+    for index, chunk in enumerate(chunks):
+        append_response = asyncio.run(
+            call_tool(
+                "append_file_upload_chunk",
+                {
+                    "upload_id": upload_id,
+                    "chunk_data_base64": chunk,
+                    "chunk_index": index,
+                },
+            )
+        )
+        assert json.loads(append_response[0].text)["status"] == "ok"
+
+    status_response = asyncio.run(call_tool("get_file_upload_status", {"upload_id": upload_id}))
+    status = json.loads(status_response[0].text)
+    assert status["status"] == "uploading"
+    assert status["chunk_count"] == 2
+    assert status["received_bytes"] == len(file_bytes)
+    assert status["ready_to_finalize"] is True
+
+    finalize_response = asyncio.run(call_tool("finalize_file_upload", {"upload_id": upload_id}))
+    finalized = json.loads(finalize_response[0].text)
+    assert finalized["status"] == "ok"
+    assert finalized["received_bytes"] == len(file_bytes)
+
+
 def test_mcp_exposes_canonical_schema_tool():
     tools = asyncio.run(list_tools())
-    assert "get_canonical_schema" in {tool.name for tool in tools}
+    tool_names = {tool.name for tool in tools}
+    assert "get_canonical_schema" in tool_names
+    assert "get_file_upload_status" in tool_names
+    assert "describe_session" in tool_names
 
     schema_response = asyncio.run(call_tool("get_canonical_schema", {}))
     schema = json.loads(schema_response[0].text)
@@ -337,6 +387,72 @@ def test_mcp_rank_creatives_handles_grouped_list_values(tmp_path):
     shared = next(row for row in ranking["top"] if row["concept"] == "Shared Concept")
     assert shared["platforms"] == ["Meta", "TikTok"]
     assert shared["performance_score"] == 67.5
+
+
+def test_mcp_rank_creatives_by_spend_without_duplicate_columns(tmp_path):
+    workbook_path = tmp_path / "offset_workbook.xlsx"
+    _write_offset_sheet(workbook_path, _standard_sheet_df())
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    ranking_response = asyncio.run(
+        call_tool(
+            "rank_creatives",
+            {
+                "session_id": ingest["session_id"],
+                "metric": "spend",
+                "top_n": 3,
+                "bottom_n": 1,
+                "min_spend": 0,
+            },
+        )
+    )
+    ranking = json.loads(ranking_response[0].text)
+
+    assert ranking["status"] == "ok"
+    assert ranking["metric"] == "spend"
+    assert ranking["top"][0]["creative_name"] == "Creative C"
+    assert ranking["top"][0]["spend"] == 1500
+
+
+def test_mcp_describe_session_reports_metrics_and_distributions(tmp_path):
+    workbook_path = tmp_path / "offset_workbook.xlsx"
+    _write_offset_sheet(workbook_path, _standard_sheet_df())
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    summary_response = asyncio.run(
+        call_tool("describe_session", {"session_id": ingest["session_id"]})
+    )
+    summary = json.loads(summary_response[0].text)
+
+    assert summary["status"] == "ok"
+    assert summary["row_counts"]["scored_creatives"] == 3
+    assert "spend" in summary["available_numeric_metrics"]
+    assert "performance_score" in summary["available_numeric_metrics"]
+    assert summary["platform_distribution"]["Meta"] == 2
+    assert summary["objective_distribution"]["Awareness"] == 2
+    assert "concept" in summary["available_group_by_fields"]
 
 
 def test_mcp_file_path_error_explains_remote_upload_default():

@@ -142,12 +142,12 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
         
         # Common patterns for mapping
         patterns = {
-            "spend": ["spend", "cost", "amount", "budget"],
-            "impressions": ["imp", "view", "show"],
+            "spend": ["spend", "spent", "cost", "amount", "budget"],
+            "impressions": ["impression", "impressions", "imps", "served", "shown"],
             "reach": ["reach", "unique"],
             "clicks": ["click"],
-            "vtr_2s": ["2s", "3s", "hook"],
-            "video_views_100": ["complete", "100%", "finish"],
+            "video_views_100": ["complete", "completion", "100%", "finish"],
+            "vtr_2s": ["2s", "3s", "hook", "video play", "video plays", "views"],
             "creative_name": ["creative", "concept", "ad name"],
             "platform": ["platform", "network", "where"],
             "objective": ["objective", "goal"],

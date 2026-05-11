@@ -27,11 +27,65 @@ TARGET_FIELDS = {
     "asset_type_raw": "Granular asset type, for example BAU, Creator, or Partner.",
     "os_target": "Operating system targeted, for example iOS, Android, or All.",
     "audience_segment": "Audience or targeting segment.",
+    "concept": "Creative concept rollup label. If absent, creative_name is used.",
+    "product": "Product or product family label.",
+    "wave": "Campaign wave or flight label.",
 }
 
 REQUIRED_FIELDS = ["creative_name", "platform", "objective", "spend", "impressions"]
 OUTCOME_FIELDS = ["reach", "clicks", "vtr_2s", "video_views_100", "engagements", "shares"]
 SKIP_SHEET_TERMS = ("methodology", "summary", "looker", "rankings")
+
+FIELD_ALIASES = {
+    "creative_name": ["creative", "creative concept", "ad name", "asset name"],
+    "platform": ["platform", "publisher", "channel"],
+    "objective": ["objective", "campaign objective", "buying objective"],
+    "spend": ["spend", "spends", "cost", "amount spent", "media spend"],
+    "impressions": ["impressions", "imps"],
+    "reach": ["reach", "unique reach", "people reached"],
+    "frequency": ["frequency", "freq"],
+    "cpm": ["cpm", "cost per mille"],
+    "clicks": ["clicks", "link clicks", "outbound clicks"],
+    "vtr_2s": ["views", "video views", "2s views", "3s views", "hook rate"],
+    "video_views_100": ["completed views", "complete views", "100% views", "video completions"],
+    "shares": ["shares"],
+    "engagements": ["engagements", "interactions", "total engagement"],
+    "duration_s": ["duration", "video duration", "length"],
+    "format_raw": ["format", "asset format", "format type"],
+    "placement_raw": ["placement", "where it ran"],
+    "campaign_raw": ["campaign", "campaign name"],
+    "ad_name_raw": ["ad", "ad name", "variant"],
+    "buying_type": ["buying type", "buying method", "paid or boosting"],
+    "asset_type_raw": ["asset type", "creator type", "partner"],
+    "os_target": ["os", "operating system", "device os"],
+    "audience_segment": ["audience", "targeting", "segment"],
+    "concept": ["concept", "creative territory", "idea"],
+    "product": ["product", "product family"],
+    "wave": ["wave", "flight", "phase"],
+}
+
+
+def get_canonical_schema() -> dict:
+    """Return the documented target schema that mapping tools can use."""
+    fields = {}
+    for field, description in TARGET_FIELDS.items():
+        fields[field] = {
+            "description": description,
+            "required": field in REQUIRED_FIELDS,
+            "outcome_metric": field in OUTCOME_FIELDS,
+            "aliases": FIELD_ALIASES.get(field, []),
+        }
+    return {
+        "fields": fields,
+        "required_fields": REQUIRED_FIELDS,
+        "outcome_fields": OUTCOME_FIELDS,
+        "minimum_viable_mapping": REQUIRED_FIELDS,
+        "notes": [
+            "Use preview_data_mapping before ingesting non-standard exports.",
+            "vtr_2s is the early attention field for 2-second views, 3-second views, or hook rate.",
+            "video_views_100 is the completed-view count used for completion-rate metrics.",
+        ],
+    }
 
 
 def _confidence_for_mapping(source: str, target: str) -> float:
@@ -93,16 +147,47 @@ def create_mapping_preview(
             _confidence_for_mapping(source, target),
         )
 
+    mapping_diagnostics = []
+    for source, target in valid_mapping.items():
+        sample_values = [
+            value
+            for value in df[source].dropna().head(3).astype(str).tolist()
+            if value and value.lower() != "nan"
+        ]
+        mapping_diagnostics.append(
+            {
+                "source_column": source,
+                "canonical_field": target,
+                "description": TARGET_FIELDS[target],
+                "confidence": confidence_by_field.get(target, 0.0),
+                "sample_values": sample_values,
+            }
+        )
+
+    field_coverage = {
+        "mapped_field_count": len(mapped_targets),
+        "required_mapped": sorted(
+            field for field in REQUIRED_FIELDS if field in mapped_targets
+        ),
+        "required_missing": missing_required,
+        "outcome_fields_mapped": sorted(
+            field for field in OUTCOME_FIELDS if field in mapped_targets
+        ),
+    }
+
     return {
         "sheet_name": sheet_name,
         "row_count": int(len(df)),
         "source_columns": list(df.columns),
         "proposed_mapping": valid_mapping,
+        "mapping_diagnostics": mapping_diagnostics,
         "confidence_by_field": confidence_by_field,
+        "field_coverage": field_coverage,
         "missing_required_fields": missing_required,
         "ambiguous_targets": ambiguous_targets,
         "ignored_columns": [col for col in df.columns if col not in valid_mapping],
         "sample_normalized_rows": sample_rows,
+        "canonical_schema": get_canonical_schema(),
         "warnings": warnings,
         "ready_to_ingest": not missing_required and not ambiguous_targets,
     }

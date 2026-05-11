@@ -2,6 +2,7 @@ import pandas as pd
 
 from src.data_mapping import create_mapping_preview
 from src.loader import load_data
+from src.llm_mapper import generate_column_mapping
 
 
 def test_create_mapping_preview_reports_validation_and_sample_rows():
@@ -90,3 +91,37 @@ def test_load_data_uses_explicit_mapping_for_unstructured_csv(tmp_path):
     assert set(df["creative_name"]) == {"Pixel Pro Video", "Pixel Static"}
     assert set(df["concept"]) == {"Creator Demo", "Brand Still"}
     assert df["spend"].sum() == 2400
+
+
+def test_heuristic_mapping_handles_planner_export_labels(monkeypatch):
+    def fail_llm(*args, **kwargs):
+        raise RuntimeError("force heuristic fallback")
+
+    df = pd.DataFrame(
+        {
+            "Creative Concept": ["Pixel Pro Video"],
+            "Where it ran": ["TikTok"],
+            "The Objective": ["Video Views"],
+            "Total Spent": [1500],
+            "Impressions Total": [100000],
+            "People Reached": [80000],
+            "Link Clicks": [500],
+            "3s Video Plays": [20000],
+            "100% Video Completions": [1000],
+            "Total Engagements": [3200],
+        }
+    )
+    monkeypatch.setattr("src.llm_mapper.genai.Client", fail_llm)
+
+    mapping = generate_column_mapping(df)
+
+    assert mapping["Creative Concept"] == "creative_name"
+    assert mapping["Where it ran"] == "platform"
+    assert mapping["The Objective"] == "objective"
+    assert mapping["Total Spent"] == "spend"
+    assert mapping["Impressions Total"] == "impressions"
+    assert mapping["People Reached"] == "reach"
+    assert mapping["Link Clicks"] == "clicks"
+    assert mapping["3s Video Plays"] == "vtr_2s"
+    assert mapping["100% Video Completions"] == "video_views_100"
+    assert mapping["Total Engagements"] == "engagements"

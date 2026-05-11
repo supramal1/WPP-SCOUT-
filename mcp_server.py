@@ -20,7 +20,7 @@ from mcp.types import TextContent, Tool
 from src.loader import load_data
 from src.scorer import score_creatives, score_raw_variants, OBJECTIVE_METRICS
 from src.explainer import generate_explanations, generate_dimension_insights
-from src.data_mapping import create_best_mapping_preview
+from src.data_mapping import create_best_mapping_preview, get_canonical_schema
 from src.insights import (
     compare_creatives,
     find_actionable_insights,
@@ -44,9 +44,12 @@ SESSION_STATE: Dict[str, Any] = {
     "df_raw": None,       # Raw variant data
     "explained": None,    # Dataframe with explanations
     "mapping_previews": {},  # mapping_id -> preview payload
+    "uploads": {},        # upload_id -> chunked upload metadata
     "sessions": {},       # session_id -> analyzed dataframes
     "active_session_id": None,
 }
+
+ALLOWED_FILE_SUFFIXES = {".csv", ".xls", ".xlsx"}
 
 # Create the MCP server
 app = Server("wpp-scout")
@@ -56,12 +59,15 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="ingest_data",
-            description="Uploads and analyzes campaign data. Use preview_data_mapping first for non-standard exports, then pass mapping_id or column_mapping.",
+            description="Uploads and analyzes campaign data. Accepts file_data_base64, upload_id from chunked upload, or a server-local file_path/file_handle. Use preview_data_mapping first for non-standard exports, then pass mapping_id or column_mapping.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_data_base64": {"type": "string", "description": "Base64 encoded Excel or CSV file."},
-                    "file_name": {"type": "string", "description": "e.g., 'data.xlsx'"},
+                    "file_name": {"type": "string", "description": "e.g., 'data.xlsx'. Required only when file_data_base64 is used."},
+                    "file_path": {"type": "string", "description": "Server-local CSV or Excel path. Useful for local/self-hosted agents."},
+                    "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
+                    "upload_id": {"type": "string", "description": "Chunked upload ID returned by create_file_upload_session/finalize_file_upload."},
                     "min_spend": {"type": "number", "default": 500},
                     "min_reach": {"type": "number", "default": 10000},
                     "mapping_id": {"type": "string", "description": "Mapping preview ID returned by preview_data_mapping."},
@@ -70,21 +76,64 @@ async def list_tools() -> list[Tool]:
                         "description": "Explicit mapping from source column names to WPP Scout canonical fields.",
                         "additionalProperties": {"type": "string"}
                     }
-                },
-                "required": ["file_data_base64", "file_name"]
+                }
             }
         ),
         Tool(
             name="preview_data_mapping",
-            description="Preview how an uploaded non-standard Excel/CSV export maps to WPP Scout's canonical campaign schema before ingesting.",
+            description="Preview how an uploaded non-standard Excel/CSV export maps to WPP Scout's canonical campaign schema before ingesting. Accepts file_data_base64, upload_id, or server-local file_path/file_handle.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_data_base64": {"type": "string", "description": "Base64 encoded Excel or CSV file."},
-                    "file_name": {"type": "string", "description": "e.g., 'planner_export.xlsx'"},
-                },
-                "required": ["file_data_base64", "file_name"]
+                    "file_name": {"type": "string", "description": "e.g., 'planner_export.xlsx'. Required only when file_data_base64 is used."},
+                    "file_path": {"type": "string", "description": "Server-local CSV or Excel path. Useful for local/self-hosted agents."},
+                    "file_handle": {"type": "string", "description": "Alias for upload_id, upload:<id>, file:// path, or server-local path."},
+                    "upload_id": {"type": "string", "description": "Chunked upload ID returned by create_file_upload_session/finalize_file_upload."},
+                }
             }
+        ),
+        Tool(
+            name="create_file_upload_session",
+            description="Start a chunked file upload for larger CSV/XLS/XLSX campaign exports. Append base64 chunks, finalize, then pass upload_id to preview_data_mapping or ingest_data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_name": {"type": "string", "description": "Original file name, e.g. campaign.xlsx."},
+                    "expected_size_bytes": {"type": "integer", "description": "Optional expected decoded file size."},
+                    "expected_chunks": {"type": "integer", "description": "Optional expected chunk count."},
+                },
+                "required": ["file_name"],
+            },
+        ),
+        Tool(
+            name="append_file_upload_chunk",
+            description="Append one base64 chunk to a chunked upload session. Chunks can split the base64 string at any boundary.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "upload_id": {"type": "string"},
+                    "chunk_data_base64": {"type": "string"},
+                    "chunk_index": {"type": "integer", "description": "Optional zero-based chunk index for diagnostics."},
+                },
+                "required": ["upload_id", "chunk_data_base64"],
+            },
+        ),
+        Tool(
+            name="finalize_file_upload",
+            description="Decode and finalize a chunked upload. The returned upload_id can be used by preview_data_mapping or ingest_data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "upload_id": {"type": "string"},
+                },
+                "required": ["upload_id"],
+            },
+        ),
+        Tool(
+            name="get_canonical_schema",
+            description="Returns WPP Scout's canonical campaign schema, required fields, outcome fields, and common aliases for mapping exports.",
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="analyze_creatives",
@@ -93,9 +142,11 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "file_data_base64": {"type": "string"},
-                    "file_name": {"type": "string"}
-                },
-                "required": ["file_data_base64", "file_name"]
+                    "file_name": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "file_handle": {"type": "string"},
+                    "upload_id": {"type": "string"},
+                }
             }
         ),
         Tool(
@@ -303,9 +354,175 @@ def _get_session(arguments: dict) -> dict | None:
         }
     return None
 
-async def handle_ingest(arguments: dict) -> list[TextContent]:
+
+def _upload_root() -> Path:
+    root = Path(os.environ.get("WPP_SCOUT_UPLOAD_DIR", "/tmp/wpp-scout-uploads"))
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_file_name(file_name: str) -> str:
+    name = Path(file_name or "upload.xlsx").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in ALLOWED_FILE_SUFFIXES:
+        raise ValueError(
+            "Unsupported file type. Use a .csv, .xls, or .xlsx campaign export."
+        )
+    return name
+
+
+def _resolve_upload_path(upload_id: str) -> Path:
+    upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id)
+    if upload is None:
+        raise ValueError(f"Unknown upload_id: {upload_id}")
+    if upload.get("status") != "finalized":
+        raise ValueError(f"Upload {upload_id} has not been finalized yet.")
+    path = Path(upload["file_path"])
+    if not path.exists():
+        raise ValueError(f"Upload {upload_id} file is no longer available.")
+    return path
+
+
+def _resolve_file_handle(file_handle: str) -> tuple[str | None, str | None]:
+    if file_handle.startswith("upload:"):
+        return file_handle.split(":", 1)[1], None
+    if file_handle in SESSION_STATE.setdefault("uploads", {}):
+        return file_handle, None
+    if file_handle.startswith("file://"):
+        return None, file_handle[7:]
+    return None, file_handle
+
+
+def _resolve_input_file(arguments: dict, tmpdir: str) -> Path:
+    upload_id = arguments.get("upload_id")
+    file_path = arguments.get("file_path")
+    file_handle = arguments.get("file_handle")
+
+    if file_handle and not upload_id and not file_path:
+        upload_id, file_path = _resolve_file_handle(file_handle)
+
+    if upload_id:
+        return _resolve_upload_path(upload_id)
+
+    if file_path:
+        path = Path(file_path).expanduser()
+        if path.suffix.lower() not in ALLOWED_FILE_SUFFIXES:
+            raise ValueError(
+                "Unsupported file type. Use a .csv, .xls, or .xlsx campaign export."
+            )
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"File path is not available to Scout: {file_path}")
+        return path
+
     file_data_base64 = arguments.get("file_data_base64")
-    file_name = arguments.get("file_name", "upload.xlsx")
+    if not file_data_base64:
+        raise ValueError(
+            "Provide one of file_data_base64, upload_id, file_path, or file_handle."
+        )
+
+    file_name = _safe_file_name(arguments.get("file_name", "upload.xlsx"))
+    try:
+        file_bytes = base64.b64decode(file_data_base64, validate=True)
+    except Exception as e:
+        raise ValueError(f"Error decoding base64: {e}") from e
+
+    tmp_path = Path(tmpdir) / file_name
+    tmp_path.write_bytes(file_bytes)
+    return tmp_path
+
+
+async def handle_create_file_upload_session(arguments: dict) -> list[TextContent]:
+    try:
+        file_name = _safe_file_name(arguments.get("file_name", "upload.xlsx"))
+    except ValueError as e:
+        return _json_response({"status": "error", "message": str(e)})
+
+    upload_id = str(uuid.uuid4())
+    upload_dir = _upload_root() / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    base64_path = upload_dir / f"{file_name}.b64"
+    final_path = upload_dir / file_name
+    base64_path.write_text("")
+    SESSION_STATE.setdefault("uploads", {})[upload_id] = {
+        "status": "created",
+        "file_name": file_name,
+        "base64_path": str(base64_path),
+        "file_path": str(final_path),
+        "chunk_count": 0,
+        "received_base64_chars": 0,
+        "expected_size_bytes": arguments.get("expected_size_bytes"),
+        "expected_chunks": arguments.get("expected_chunks"),
+    }
+    return _json_response(
+        {
+            "status": "ok",
+            "upload_id": upload_id,
+            "file_name": file_name,
+            "accepted_file_types": sorted(ALLOWED_FILE_SUFFIXES),
+            "next_step": "Call append_file_upload_chunk for each base64 chunk, then finalize_file_upload.",
+        }
+    )
+
+
+async def handle_append_file_upload_chunk(arguments: dict) -> list[TextContent]:
+    upload_id = arguments.get("upload_id")
+    chunk = arguments.get("chunk_data_base64", "")
+    upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id)
+    if upload is None:
+        return _json_response({"status": "error", "message": f"Unknown upload_id: {upload_id}"})
+    if upload.get("status") == "finalized":
+        return _json_response({"status": "error", "message": f"Upload {upload_id} is already finalized."})
+    if not isinstance(chunk, str) or not chunk:
+        return _json_response({"status": "error", "message": "chunk_data_base64 is required."})
+
+    with open(upload["base64_path"], "a", encoding="ascii") as handle:
+        handle.write(chunk.strip())
+
+    upload["status"] = "uploading"
+    upload["chunk_count"] += 1
+    upload["received_base64_chars"] += len(chunk.strip())
+    upload["last_chunk_index"] = arguments.get("chunk_index")
+    return _json_response(
+        {
+            "status": "ok",
+            "upload_id": upload_id,
+            "chunk_count": upload["chunk_count"],
+            "received_base64_chars": upload["received_base64_chars"],
+        }
+    )
+
+
+async def handle_finalize_file_upload(arguments: dict) -> list[TextContent]:
+    upload_id = arguments.get("upload_id")
+    upload = SESSION_STATE.setdefault("uploads", {}).get(upload_id)
+    if upload is None:
+        return _json_response({"status": "error", "message": f"Unknown upload_id: {upload_id}"})
+
+    try:
+        encoded = Path(upload["base64_path"]).read_text(encoding="ascii")
+        file_bytes = base64.b64decode(encoded, validate=True)
+        final_path = Path(upload["file_path"])
+        final_path.write_bytes(file_bytes)
+    except Exception as e:
+        upload["status"] = "error"
+        upload["error"] = str(e)
+        return _json_response({"status": "error", "upload_id": upload_id, "message": f"Error decoding upload: {e}"})
+
+    upload["status"] = "finalized"
+    upload["received_bytes"] = len(file_bytes)
+    return _json_response(
+        {
+            "status": "ok",
+            "upload_id": upload_id,
+            "file_name": upload["file_name"],
+            "received_bytes": len(file_bytes),
+            "file_handle": f"upload:{upload_id}",
+            "next_step": "Pass upload_id to preview_data_mapping or ingest_data.",
+        }
+    )
+
+
+async def handle_ingest(arguments: dict) -> list[TextContent]:
     min_spend = arguments.get("min_spend", 500)
     min_reach = arguments.get("min_reach", 10000)
     mapping_id = arguments.get("mapping_id")
@@ -317,15 +534,9 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"Unknown mapping_id: {mapping_id}")]
         column_mapping = preview.get("proposed_mapping")
 
-    try:
-        file_bytes = base64.b64decode(file_data_base64)
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error decoding base64: {e}")]
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir) / file_name
-        tmp_path.write_bytes(file_bytes)
         try:
+            tmp_path = _resolve_input_file(arguments, tmpdir)
             df_raw, df = load_data(str(tmp_path), column_mapping=column_mapping)
             df['low_confidence'] = (df['spend'] < float(min_spend)) | (df['reach'] < float(min_reach))
             scored = score_creatives(df)
@@ -355,18 +566,9 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"Analysis failed: {str(e)}")]
 
 async def handle_mapping_preview(arguments: dict) -> list[TextContent]:
-    file_data_base64 = arguments.get("file_data_base64")
-    file_name = arguments.get("file_name", "upload.xlsx")
-
-    try:
-        file_bytes = base64.b64decode(file_data_base64)
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error decoding base64: {e}")]
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir) / file_name
-        tmp_path.write_bytes(file_bytes)
         try:
+            tmp_path = _resolve_input_file(arguments, tmpdir)
             preview = create_best_mapping_preview(str(tmp_path))
             mapping_id = str(uuid.uuid4())
             preview = {**preview, "mapping_id": mapping_id}
@@ -383,6 +585,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await handle_ingest(arguments)
     if name == "preview_data_mapping":
         return await handle_mapping_preview(arguments)
+    if name == "create_file_upload_session":
+        return await handle_create_file_upload_session(arguments)
+    if name == "append_file_upload_chunk":
+        return await handle_append_file_upload_chunk(arguments)
+    if name == "finalize_file_upload":
+        return await handle_finalize_file_upload(arguments)
+    if name == "get_canonical_schema":
+        return _json_response(get_canonical_schema())
 
     # Check if data exists for query tools
     session = _get_session(arguments)

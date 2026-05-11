@@ -132,6 +132,39 @@ Local SSE endpoints:
 
 The MCP server stores analyzed data in process memory. `ingest_data` returns a `session_id`; pass it into later tools when running more than one analysis in the same process. If omitted, most tools use the active session.
 
+## MCP Data Ingest Workflow
+
+For small files, `preview_data_mapping` and `ingest_data` still accept:
+
+```json
+{
+  "file_data_base64": "<base64 CSV/XLS/XLSX>",
+  "file_name": "campaign_export.xlsx"
+}
+```
+
+For normal campaign workbooks, prefer chunked upload so the agent does not have to pass one large base64 argument:
+
+1. Call `create_file_upload_session` with `file_name`.
+2. Base64-encode the file and send it in smaller chunks with `append_file_upload_chunk`.
+3. Call `finalize_file_upload`.
+4. Pass the returned `upload_id` to `preview_data_mapping`.
+5. Review `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, and `sample_normalized_rows`.
+6. Pass the same `upload_id` plus `mapping_id` to `ingest_data`.
+
+Local or self-hosted agents can also pass a server-accessible `file_path`, `file://` handle, or `upload:<upload_id>` handle to `preview_data_mapping` and `ingest_data`. Remote WPP Open agents should use chunked upload unless the host provides a server-side file handle.
+
+Useful MCP tools:
+
+| Tool | Purpose |
+|---|---|
+| `get_canonical_schema` | Returns target fields, required fields, outcome fields, and common aliases. |
+| `create_file_upload_session` | Starts a chunked upload for `.csv`, `.xls`, or `.xlsx`. |
+| `append_file_upload_chunk` | Appends one base64 chunk. Chunks can split the base64 string at any boundary. |
+| `finalize_file_upload` | Decodes the uploaded chunks and returns a reusable `upload_id` / `file_handle`. |
+| `preview_data_mapping` | Returns proposed column mapping, diagnostics, schema, and sample normalized rows before scoring. |
+| `ingest_data` | Scores the finalized upload or file once the mapping has been confirmed. |
+
 ## Optional FastAPI Harness
 
 Run the API harness:
@@ -219,10 +252,12 @@ The native workbook loader expects headers on row 3 and normalizes columns such 
 
 For non-standard exports, use the mapping workflow:
 
-1. Call `preview_data_mapping`.
-2. Review `proposed_mapping`, `missing_required_fields`, `ignored_columns`, and `sample_normalized_rows`.
-3. If acceptable, call `ingest_data` with `mapping_id`.
-4. If the user corrects the mapping, call `ingest_data` with explicit `column_mapping`.
+1. Call `get_canonical_schema` if the agent needs the target fields.
+2. Upload the file with chunked upload for larger workbooks, or pass a small `file_data_base64` payload.
+3. Call `preview_data_mapping`.
+4. Review `proposed_mapping`, `mapping_diagnostics`, `field_coverage`, `missing_required_fields`, `ignored_columns`, and `sample_normalized_rows`.
+5. If acceptable, call `ingest_data` with `mapping_id`.
+6. If the user corrects the mapping, call `ingest_data` with explicit `column_mapping`.
 
 The mapping provider first tries Gemini on Vertex AI. If credentials are unavailable or the model call fails, it falls back to heuristic column matching. The heuristic is useful for simple exports but should not be treated as authoritative for client-critical uploads.
 

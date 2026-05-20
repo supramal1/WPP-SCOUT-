@@ -19,7 +19,13 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
 
 from src.loader import load_data
-from src.scorer import score_creatives, score_raw_variants, OBJECTIVE_METRICS
+from src.scorer import (
+    DEFAULT_RANK_METRIC,
+    METHODOLOGY_VERSION,
+    OBJECTIVE_METRICS,
+    score_creatives,
+    score_raw_variants,
+)
 from src.explainer import generate_explanations, generate_dimension_insights
 from src.data_mapping import create_best_mapping_preview, get_canonical_schema
 from src.insights import (
@@ -193,12 +199,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="rank_creatives",
-            description="Post-ingest analysis query. Rank creatives or grouped cohorts by any numeric metric such as composite_score, spend, reach, vtr_2s, engagement_rate, ctr, or workbook-provided performance_score. Pass session_id; omitting it uses active session with a warning unless require_session_id=true.",
+            description="Post-ingest analysis query. Defaults to creative_quality_score, the headline creative diagnostic metric. Use combined_scout_score/composite_score for the blended creative + media-efficiency view, or pass any numeric metric such as spend, reach, vtr_2s, engagement_rate, ctr, or workbook-provided performance_score. Pass session_id; omitting it uses active session with a warning unless require_session_id=true.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "session_id": {"type": "string"},
-                    "metric": {"type": "string", "default": "composite_score"},
+                    "metric": {"type": "string", "default": DEFAULT_RANK_METRIC},
                     "group_by": {"type": "string", "description": "Optional grouping field, e.g. creative_name, concept, platform, objective, format_canonical, placement_canonical, asset_type_canonical, os_target."},
                     "top_n": {"type": "integer", "default": 10},
                     "bottom_n": {"type": "integer", "default": 10},
@@ -821,7 +827,10 @@ async def handle_ingest(arguments: dict) -> list[TextContent]:
                 header_row=arguments.get("header_row"),
                 preserve_columns=arguments.get("preserve_columns"),
             )
-            df['low_confidence'] = (df['spend'] < float(min_spend)) | (df['reach'] < float(min_reach))
+            reach_available = df["reach"] > 0
+            df["low_confidence"] = (df["spend"] < float(min_spend)) | (
+                reach_available & (df["reach"] < float(min_reach))
+            )
             scored = score_creatives(df)
             explained = generate_explanations(scored)
             df_raw_scored = score_raw_variants(df_raw)
@@ -883,7 +892,7 @@ def handle_rank_creatives(
     explained: pd.DataFrame,
     session_context: dict | None = None,
 ) -> list[TextContent]:
-    metric = arguments.get("metric") or "composite_score"
+    metric = arguments.get("metric") or DEFAULT_RANK_METRIC
     group_by = arguments.get("group_by")
     top_n = int(arguments.get("top_n", 10))
     bottom_n = int(arguments.get("bottom_n", 10))
@@ -958,6 +967,17 @@ def handle_rank_creatives(
             "reach",
             "impressions",
             "low_confidence",
+            "creative_quality_score",
+            "media_efficiency_overlay_score",
+            "combined_scout_score",
+            "scoring_group",
+            "group_size",
+            "rank_in_group",
+            "youtube_measurement_family",
+            "methodology_version",
+            "source_grain",
+            "directional_only",
+            "score_caveats",
             metric,
         ]
         if group_by and group_by in ranked.columns:
@@ -979,6 +999,8 @@ def handle_rank_creatives(
         {
             "status": "ok",
             "metric": metric,
+            "default_metric": DEFAULT_RANK_METRIC,
+            "methodology_version": METHODOLOGY_VERSION,
             "group_by": group_by,
             "session": session_context,
             "warnings": warnings,
@@ -1023,10 +1045,34 @@ def handle_describe_session(session: dict) -> list[TextContent]:
     low_confidence_count = int(explained.get("low_confidence", pd.Series(dtype=bool)).sum())
     if low_confidence_count:
         warnings.append(f"{low_confidence_count} low-confidence creative(s) need more data.")
+    if "group_size" in explained.columns:
+        group_size = pd.to_numeric(explained["group_size"], errors="coerce").fillna(0)
+        small_cohort_count = int(((group_size > 0) & (group_size < 8)).sum())
+        if small_cohort_count:
+            warnings.append(
+                f"{small_cohort_count} creative(s) are in small scoring cohorts; rankings are directional only."
+            )
 
     return _json_response(
         {
             "status": "ok",
+            "methodology_version": METHODOLOGY_VERSION,
+            "default_rank_metric": DEFAULT_RANK_METRIC,
+            "score_contract": {
+                "headline_metric": DEFAULT_RANK_METRIC,
+                "combined_metric": "combined_scout_score",
+                "legacy_combined_metric": "composite_score",
+                "media_efficiency_metric": "media_efficiency_overlay_score",
+                "row_metadata": [
+                    "methodology_version",
+                    "source_grain",
+                    "directional_only",
+                    "score_caveats",
+                    "scoring_group",
+                    "group_size",
+                    "rank_in_group",
+                ],
+            },
             "row_counts": {
                 "raw_rows": int(len(df_raw)),
                 "scored_creatives": int(len(explained)),
@@ -1160,7 +1206,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         elif name == "get_creative_deep_dive":
             c_name = arguments.get("creative_name", "")
-            match = explained[explained["creative_name"].str.contains(c_name, case=False, na=False)]
+            match = explained[
+                explained["creative_name"].str.contains(
+                    c_name, case=False, na=False, regex=False
+                )
+            ]
             
             if match.empty:
                 return [TextContent(type="text", text=f"No creative found matching '{c_name}'")]

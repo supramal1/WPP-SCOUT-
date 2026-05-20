@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 TARGET_FIELDS = {
     "ad_name_raw": "The raw name of the ad variant.",
     "creative_name": "The overarching creative concept name.",
-    "platform": "The platform the ad ran on (e.g., Meta, TikTok).",
+    "platform": "The platform the ad ran on (e.g., Meta, TikTok, YouTube).",
     "format_raw": "The ad format (e.g., Video, Static, Motion).",
     "placement_raw": "Where the ad appeared (e.g., In-Feed, Stories).",
     "campaign_raw": "The campaign name.",
@@ -36,6 +36,18 @@ TARGET_FIELDS = {
     "product": "Product or product family label.",
     "wave": "Campaign wave or flight label.",
     "performance_score": "Workbook-provided score or performance index to preserve alongside Scout's composite_score.",
+    "ad_id": "Stable ad or asset identifier, for example OPID or platform asset key.",
+    "video_id": "Platform video identifier kept as metadata.",
+    "campaign_type": "Native platform campaign type or advertising channel type.",
+    "campaign_subtype": "Native platform campaign subtype or advertising channel subtype.",
+    "bid_strategy_type": "Native platform bid strategy type.",
+    "optimization_goal": "Native platform optimization goal or campaign goal.",
+    "trueview_views": "Google Ads TrueView view count.",
+    "trueview_view_rate": "Google Ads TrueView view rate.",
+    "video_quartile_p25_rate": "Video played to 25% rate.",
+    "video_quartile_p50_rate": "Video played to 50% rate.",
+    "video_quartile_p75_rate": "Video played to 75% rate.",
+    "video_quartile_p100_rate": "Video played to 100% rate.",
 }
 
 # Provide few-shot examples of common column renames
@@ -155,7 +167,7 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
             "creative_name": ["creative", "concept", "ad name"],
             "platform": ["platform", "network", "where"],
             "objective": ["objective", "goal"],
-            "buying_type": ["buying", "method", "type"],
+            "buying_type": ["buying", "method", "buying type"],
             "format_raw": ["format"],
             "os_target": ["os", "operating"],
             "concept": ["concept", "creative territory", "idea"],
@@ -165,6 +177,18 @@ def generate_column_mapping(df: pd.DataFrame, target_fields: Dict[str, str] = TA
             "engagements": ["engagement", "interaction"],
             "shares": ["share"],
             "performance_score": ["score", "performance index", "efficiency index"],
+            "ad_id": ["ad id", "asset id", "opid", "consolidated asset key"],
+            "video_id": ["video id"],
+            "campaign_type": ["campaign type", "advertising channel type"],
+            "campaign_subtype": ["campaign subtype", "advertising channel subtype"],
+            "bid_strategy_type": ["bid strategy type", "bidding strategy type"],
+            "optimization_goal": ["optimization goal", "campaign goal", "goal type"],
+            "trueview_views": ["trueview views", "true view views"],
+            "trueview_view_rate": ["trueview view rate", "true view view rate"],
+            "video_quartile_p25_rate": ["video played to 25%", "25%"],
+            "video_quartile_p50_rate": ["video played to 50%", "50%"],
+            "video_quartile_p75_rate": ["video played to 75%", "75%"],
+            "video_quartile_p100_rate": ["video played to 100%", "100%"],
         }
         
         for col in columns_list:

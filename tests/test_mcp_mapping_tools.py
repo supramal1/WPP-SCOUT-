@@ -177,6 +177,43 @@ def test_mcp_ingest_accepts_server_file_path(tmp_path):
     assert ingest["creatives_analyzed"] == 2
 
 
+def test_mcp_ingest_does_not_mark_missing_reach_as_low_confidence(tmp_path):
+    csv_path = tmp_path / "youtube_no_reach.csv"
+    pd.DataFrame(
+        {
+            "Ad name": ["(OPID-4624155)_Pixel_YouTube_20s_Generic_Imp"],
+            "Platform": ["YouTube"],
+            "Objective": ["Video Views"],
+            "Cost": ["800"],
+            "Impr.": ["8,189"],
+            "Clicks": ["7"],
+        }
+    ).to_csv(csv_path, index=False)
+    SESSION_STATE["explained"] = None
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(csv_path),
+                "column_mapping": {
+                    "Ad name": "creative_name",
+                    "Platform": "platform",
+                    "Objective": "objective",
+                    "Cost": "spend",
+                    "Impr.": "impressions",
+                    "Clicks": "clicks",
+                },
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    assert ingest["status"] == "ok"
+    assert bool(SESSION_STATE["df"]["low_confidence"].iloc[0]) is False
+    assert bool(SESSION_STATE["explained"]["low_confidence"].iloc[0]) is False
+
+
 def test_mcp_chunked_upload_can_preview_and_ingest(monkeypatch, tmp_path):
     df = _sample_df()
     file_path = tmp_path / "planner_export.xlsx"
@@ -544,6 +581,51 @@ def test_mcp_rank_creatives_by_spend_without_duplicate_columns(tmp_path):
     assert ranking["top"][0]["spend"] == 1500
 
 
+def test_mcp_rank_creatives_defaults_to_creative_quality_and_returns_methodology_metadata(tmp_path):
+    workbook_path = tmp_path / "offset_workbook.xlsx"
+    _write_offset_sheet(workbook_path, _standard_sheet_df())
+
+    ingest_response = asyncio.run(
+        call_tool(
+            "ingest_data",
+            {
+                "file_path": str(workbook_path),
+                "sheet_name": "Data Analysis (All)",
+                "header_row": 6,
+            },
+        )
+    )
+    ingest = json.loads(ingest_response[0].text)
+
+    ranking_response = asyncio.run(
+        call_tool(
+            "rank_creatives",
+            {
+                "session_id": ingest["session_id"],
+                "top_n": 1,
+                "bottom_n": 0,
+                "min_spend": 0,
+            },
+        )
+    )
+    ranking = json.loads(ranking_response[0].text)
+
+    assert ranking["status"] == "ok"
+    assert ranking["metric"] == "creative_quality_score"
+    assert ranking["default_metric"] == "creative_quality_score"
+    assert ranking["methodology_version"]
+    top = ranking["top"][0]
+    assert top["creative_quality_score"] is not None
+    assert top["combined_scout_score"] is not None
+    assert top["methodology_version"] == ranking["methodology_version"]
+    assert top["source_grain"] == "creative"
+    assert top["directional_only"] is True
+    assert "Small scoring cohort" in top["score_caveats"]
+    assert top["scoring_group"]
+    assert top["group_size"] > 0
+    assert top["rank_in_group"] > 0
+
+
 def test_mcp_describe_session_reports_metrics_and_distributions(tmp_path):
     workbook_path = tmp_path / "offset_workbook.xlsx"
     _write_offset_sheet(workbook_path, _standard_sheet_df())
@@ -569,6 +651,10 @@ def test_mcp_describe_session_reports_metrics_and_distributions(tmp_path):
     assert summary["row_counts"]["scored_creatives"] == 3
     assert "spend" in summary["available_numeric_metrics"]
     assert "performance_score" in summary["available_numeric_metrics"]
+    assert summary["default_rank_metric"] == "creative_quality_score"
+    assert summary["methodology_version"]
+    assert summary["score_contract"]["headline_metric"] == "creative_quality_score"
+    assert summary["score_contract"]["combined_metric"] == "combined_scout_score"
     assert summary["platform_distribution"]["Meta"] == 2
     assert summary["objective_distribution"]["Awareness"] == 2
     assert "concept" in summary["available_group_by_fields"]

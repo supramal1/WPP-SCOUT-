@@ -2,6 +2,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.scorer import DEFAULT_RANK_METRIC, METHODOLOGY_VERSION
+
 
 def _safe_val(value: Any):
     if value is None:
@@ -26,6 +28,17 @@ def _creative_record(row: pd.Series) -> dict:
         "placement",
         "placement_canonical",
         "composite_score",
+        "combined_scout_score",
+        "creative_quality_score",
+        "media_efficiency_overlay_score",
+        "methodology_version",
+        "source_grain",
+        "directional_only",
+        "score_caveats",
+        "scoring_group",
+        "group_size",
+        "rank_in_group",
+        "youtube_measurement_family",
         "tier",
         "action",
         "spend",
@@ -201,6 +214,15 @@ def get_data_quality_report(df_raw: pd.DataFrame, scored: pd.DataFrame) -> dict:
     if zero_heavy_columns:
         warnings.append("Mostly zero columns: " + ", ".join(zero_heavy_columns))
 
+    small_cohort_count = 0
+    if "group_size" in scored.columns:
+        group_size = pd.to_numeric(scored["group_size"], errors="coerce").fillna(0)
+        small_cohort_count = int(((group_size > 0) & (group_size < 8)).sum())
+        if small_cohort_count:
+            warnings.append(
+                f"{small_cohort_count} creative(s) are in small scoring cohorts; rankings are directional only."
+            )
+
     data = {
         "raw_rows": int(len(df_raw)),
         "scored_creatives": int(len(scored)),
@@ -213,13 +235,18 @@ def get_data_quality_report(df_raw: pd.DataFrame, scored: pd.DataFrame) -> dict:
         "low_confidence_creatives": low_confidence_count,
         "zero_heavy_columns": zero_heavy_columns,
         "missing_columns": missing_columns,
+        "small_scoring_cohort_creatives": small_cohort_count,
+        "methodology_version": METHODOLOGY_VERSION,
+        "default_rank_metric": DEFAULT_RANK_METRIC,
     }
     return _ok(data, warnings=warnings)
 
 
 def get_score_breakdown(scored: pd.DataFrame, creative_name: str) -> dict:
     match = scored[
-        scored["creative_name"].astype(str).str.contains(creative_name, case=False, na=False)
+        scored["creative_name"]
+        .astype(str)
+        .str.contains(creative_name, case=False, na=False, regex=False)
     ]
     if match.empty:
         return {"status": "not_found", "data": None, "warnings": [f"No creative found matching {creative_name!r}"], "next_actions": []}
@@ -231,6 +258,11 @@ def get_score_breakdown(scored: pd.DataFrame, creative_name: str) -> dict:
         "secondary_kpi_score": _safe_val(row.get("secondary_kpi_score")),
         "cost_efficiency_score": _safe_val(row.get("cost_efficiency_score")),
         "attention_proxy_score": _safe_val(row.get("attention_proxy_score")),
+        "creative_quality_score": _safe_val(row.get("creative_quality_score")),
+        "media_efficiency_overlay_score": _safe_val(
+            row.get("media_efficiency_overlay_score")
+        ),
+        "combined_scout_score": _safe_val(row.get("combined_scout_score")),
     }
     return _ok(data)
 
@@ -329,7 +361,9 @@ def compare_creatives(scored: pd.DataFrame, creative_names: list[str]) -> dict:
     rows = []
     for name in creative_names:
         match = scored[
-            scored["creative_name"].astype(str).str.contains(name, case=False, na=False)
+            scored["creative_name"]
+            .astype(str)
+            .str.contains(name, case=False, na=False, regex=False)
         ]
         if not match.empty:
             rows.append(match.sort_values("composite_score", ascending=False).iloc[0])

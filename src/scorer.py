@@ -1,6 +1,10 @@
 import pandas as pd
 import numpy as np
 
+METHODOLOGY_VERSION = "youtube_mid_funnel_creative_quality_v1"
+DEFAULT_RANK_METRIC = "creative_quality_score"
+SMALL_COHORT_THRESHOLD = 8
+
 
 # =============================================================================
 # SCORING CONFIGURATION
@@ -169,6 +173,38 @@ def frequency_penalty(freq: float) -> float:
     return 1.0 / (1.0 + excess * 0.15)
 
 
+def _score_caveats(row: pd.Series) -> str:
+    caveats = []
+    if bool(row.get("directional_only", False)):
+        caveats.append("Small scoring cohort; rankings are directional only")
+    if bool(row.get("low_confidence", False)):
+        caveats.append("Low spend or reach; collect more data before scaling")
+
+    reach = pd.to_numeric(pd.Series([row.get("reach", 0)]), errors="coerce").fillna(0).iloc[0]
+    frequency = (
+        pd.to_numeric(pd.Series([row.get("frequency", 0)]), errors="coerce")
+        .fillna(0)
+        .iloc[0]
+    )
+    if not bool(row.get("frequency_penalty_applied", False)) and (
+        reach <= 0 or frequency <= 0
+    ):
+        caveats.append(
+            "No valid creative-level reach/frequency; frequency penalty not applied"
+        )
+    return "; ".join(caveats)
+
+
+def _add_score_metadata(df: pd.DataFrame, source_grain: str) -> pd.DataFrame:
+    df = df.copy()
+    df["methodology_version"] = METHODOLOGY_VERSION
+    df["source_grain"] = source_grain
+    group_size = pd.to_numeric(df.get("group_size", 0), errors="coerce").fillna(0)
+    df["directional_only"] = (group_size > 0) & (group_size < SMALL_COHORT_THRESHOLD)
+    df["score_caveats"] = df.apply(_score_caveats, axis=1)
+    return df
+
+
 def percentile_rank(series: pd.Series) -> pd.Series:
     """Compute percentile rank (0-100) for a series, handling NaN."""
     return series.rank(pct=True, na_option="bottom") * 100
@@ -232,11 +268,17 @@ def score_group(
         df["secondary_kpi_score"] = 50.0
         df["cost_efficiency_score"] = 50.0
         df["attention_proxy_score"] = 50.0
+        df["creative_quality_score"] = 50.0
+        df["media_efficiency_overlay_score"] = 50.0
         df["attention_inputs_available"] = False
+        df["attention_proxy_metrics_used"] = ""
         df["score_renormalized"] = True
         df["attention_proxy_weight"] = 0.0
         df["applied_weight_total"] = 0.9
+        df["frequency_penalty_applied"] = False
+        df["freq_penalty"] = 1.0
         df["composite_score"] = 50.0
+        df["combined_scout_score"] = 50.0
         df["rank_in_group"] = 1
         df["group_size"] = len(df)
         return df
@@ -273,18 +315,27 @@ def score_group(
 
     # Attention Proxy Score (replaces Wooshii)
     # Use pre-computed attention metrics if available
-    attention_metrics = []
-    for col in [
+    attention_metric_cols = [
         "canonical_hook_rate",
         "canonical_hold_rate",
         "canonical_completion_rate",
-    ]:
+    ]
+    if "completion_vs_expected" in metrics_config.get("primary", []):
+        attention_metric_cols = [
+            col for col in attention_metric_cols if col != "canonical_completion_rate"
+        ]
+
+    attention_metrics = []
+    attention_metrics_used = []
+    for col in attention_metric_cols:
         if col in df.columns and df[col].notna().any():
             attention_metrics.append(percentile_rank(df[col]))
+            attention_metrics_used.append(col)
 
     if attention_metrics:
         df["attention_proxy_score"] = pd.concat(attention_metrics, axis=1).mean(axis=1)
         df["attention_inputs_available"] = True
+        df["attention_proxy_metrics_used"] = ", ".join(attention_metrics_used)
         df["score_renormalized"] = False
         df["attention_proxy_weight"] = weights["attention_proxy"]
         df["applied_weight_total"] = 1.0
@@ -292,6 +343,7 @@ def score_group(
         # No attention inputs available - renormalize
         df["attention_proxy_score"] = float("nan")
         df["attention_inputs_available"] = False
+        df["attention_proxy_metrics_used"] = ""
         df["score_renormalized"] = True
         df["attention_proxy_weight"] = 0.0
         df["applied_weight_total"] = 0.9
@@ -316,8 +368,30 @@ def score_group(
             + df["attention_proxy_score"] * weights["attention_proxy"]
         )
 
-    # Apply frequency penalty
-    df["freq_penalty"] = df["frequency"].apply(frequency_penalty)
+    if df["score_renormalized"].iloc[0]:
+        quality_total = WEIGHTS_RENORMALIZED["primary"] + WEIGHTS_RENORMALIZED["secondary"]
+        df["creative_quality_score"] = (
+            df["primary_kpi_score"] * (WEIGHTS_RENORMALIZED["primary"] / quality_total)
+            + df["secondary_kpi_score"] * (WEIGHTS_RENORMALIZED["secondary"] / quality_total)
+        )
+    else:
+        quality_total = weights["primary"] + weights["secondary"] + weights["attention_proxy"]
+        df["creative_quality_score"] = (
+            df["primary_kpi_score"] * (weights["primary"] / quality_total)
+            + df["secondary_kpi_score"] * (weights["secondary"] / quality_total)
+            + df["attention_proxy_score"] * (weights["attention_proxy"] / quality_total)
+        )
+    df["media_efficiency_overlay_score"] = df["cost_efficiency_score"]
+
+    # Apply frequency penalty only when creative-level reach/frequency are valid.
+    reach = pd.to_numeric(df.get("reach", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    frequency = pd.to_numeric(df.get("frequency", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    valid_frequency = (reach > 0) & (frequency > 0)
+    df["frequency_penalty_applied"] = valid_frequency & (frequency > 2.0)
+    df["freq_penalty"] = 1.0
+    df.loc[valid_frequency, "freq_penalty"] = frequency[valid_frequency].apply(
+        frequency_penalty
+    )
     df["composite_score"] = df["composite_raw"] * df["freq_penalty"]
 
     # Apply audience consistency adjustment
@@ -334,6 +408,7 @@ def score_group(
     df.loc[df["low_confidence"], "composite_score"] = df.loc[
         df["low_confidence"], "composite_score"
     ].clip(upper=80)
+    df["combined_scout_score"] = df["composite_score"]
 
     # Rank within group
     df["rank_in_group"] = (
@@ -395,7 +470,10 @@ def score_raw_variants(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     # Audience consistency doesn't apply at variant level — neutral score
     df["audience_consistency"] = 1.0
-    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+    reach_available = df["reach"] > 0
+    df["low_confidence"] = (df["spend"] < 500) | (
+        reach_available & (df["reach"] < 10000)
+    )
 
     # Ensure buying_type exists (default to 'Paid' for backwards compatibility)
     if "buying_type" not in df.columns:
@@ -405,14 +483,26 @@ def score_raw_variants(df_raw: pd.DataFrame) -> pd.DataFrame:
     if "format_canonical" not in df.columns:
         df["format_canonical"] = df.get("format", pd.Series("Unknown", index=df.index))
 
+    group_cols = ["objective", "platform", "buying_type", "format_canonical"]
+    if "youtube_measurement_family" in df.columns:
+        group_cols.append("youtube_measurement_family")
+
     scored_groups = []
-    for (objective, platform, buying_type, fmt), group in df.groupby(
-        ["objective", "platform", "buying_type", "format_canonical"]
-    ):
+    for group_key, group in df.groupby(group_cols):
+        key = dict(zip(group_cols, group_key if isinstance(group_key, tuple) else (group_key,)))
+        objective = key["objective"]
+        platform = key["platform"]
+        buying_type = key["buying_type"]
+        fmt = key["format_canonical"]
         metrics_config = get_metrics_config(objective, fmt)
         scored = score_group(group.copy(), metrics_config, WEIGHTS_FULL)
         fmt_label = f" [{fmt}]" if is_static_format(fmt) else ""
-        scored["scoring_group"] = f"{objective} | {platform} | {buying_type}{fmt_label}"
+        family_label = (
+            f" | {key['youtube_measurement_family']}"
+            if "youtube_measurement_family" in key
+            else ""
+        )
+        scored["scoring_group"] = f"{objective} | {platform} | {buying_type}{fmt_label}{family_label}"
         scored_groups.append(scored)
 
     if not scored_groups:
@@ -420,6 +510,12 @@ def score_raw_variants(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     result = pd.concat(scored_groups, ignore_index=True)
     result["composite_score"] = result["composite_score"].round(1)
+    result["combined_scout_score"] = result["composite_score"]
+    result["creative_quality_score"] = result["creative_quality_score"].round(1)
+    result["media_efficiency_overlay_score"] = result[
+        "media_efficiency_overlay_score"
+    ].round(1)
+    result = _add_score_metadata(result, source_grain="ad_line")
     result["tier"] = pd.cut(
         result["composite_score"],
         bins=[0, 25, 50, 70, 85, 100],
@@ -486,19 +582,37 @@ def score_creatives(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df["format_canonical"] = df.get("format", pd.Series("Unknown", index=df.index))
 
+    group_cols = ["objective", "platform", "buying_type", "format_canonical"]
+    if "youtube_measurement_family" in df.columns:
+        group_cols.append("youtube_measurement_family")
+
     scored_groups = []
 
-    for (objective, platform, buying_type, fmt), group in df.groupby(
-        ["objective", "platform", "buying_type", "format_canonical"]
-    ):
+    for group_key, group in df.groupby(group_cols):
+        key = dict(zip(group_cols, group_key if isinstance(group_key, tuple) else (group_key,)))
+        objective = key["objective"]
+        platform = key["platform"]
+        buying_type = key["buying_type"]
+        fmt = key["format_canonical"]
         metrics_config = get_metrics_config(objective, fmt)
         scored = score_group(group, metrics_config, WEIGHTS_FULL)
         fmt_label = f" [{fmt}]" if is_static_format(fmt) else ""
-        scored["scoring_group"] = f"{objective} | {platform} | {buying_type}{fmt_label}"
+        family_label = (
+            f" | {key['youtube_measurement_family']}"
+            if "youtube_measurement_family" in key
+            else ""
+        )
+        scored["scoring_group"] = f"{objective} | {platform} | {buying_type}{fmt_label}{family_label}"
         scored_groups.append(scored)
 
     result = pd.concat(scored_groups, ignore_index=True)
     result["composite_score"] = result["composite_score"].clip(upper=100).round(1)
+    result["combined_scout_score"] = result["composite_score"]
+    result["creative_quality_score"] = result["creative_quality_score"].clip(upper=100).round(1)
+    result["media_efficiency_overlay_score"] = result[
+        "media_efficiency_overlay_score"
+    ].clip(upper=100).round(1)
+    result = _add_score_metadata(result, source_grain="creative")
 
     # Assign performance tier
     result["tier"] = pd.cut(

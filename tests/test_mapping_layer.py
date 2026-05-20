@@ -4,6 +4,7 @@ import zipfile
 from src.data_mapping import create_best_mapping_preview, create_mapping_preview
 from src.loader import load_data
 from src.llm_mapper import generate_column_mapping
+from src.scorer import score_creatives
 
 
 def test_create_mapping_preview_reports_validation_and_sample_rows():
@@ -197,6 +198,167 @@ def test_load_data_preserves_explicit_custom_metadata_columns(tmp_path):
     assert "metadata_review_owner" in df_raw.columns
     assert "metadata_review_owner" in df.columns
     assert set(df["metadata_review_owner"]) == {"Ana", "Max"}
+
+
+def test_mapping_preview_warns_when_video_id_is_scientific_notation():
+    df = pd.DataFrame(
+        {
+            "Ad name": [
+                "(OPID-4624155)_Pixel_YouTube_20s_Generic_Vertical_GStore_Imp"
+            ],
+            "Video ID": ["3.25846E+11"],
+            "Platform": ["YouTube"],
+            "Objective": ["Video Views"],
+            "Cost": [80.8],
+            "Impr.": ["8,189"],
+        }
+    )
+
+    preview = create_mapping_preview(
+        df,
+        "Updated Creative Report Template",
+        {
+            "Ad name": "creative_name",
+            "Video ID": "video_id",
+            "Platform": "platform",
+            "Objective": "objective",
+            "Cost": "spend",
+            "Impr.": "impressions",
+        },
+    )
+
+    assert preview["proposed_mapping"]["Ad name"] == "creative_name"
+    assert preview["proposed_mapping"]["Video ID"] == "video_id"
+    assert "video_id" in preview["preserved_metadata_fields"]
+    assert any("scientific notation" in warning for warning in preview["warnings"])
+
+
+def test_load_data_uses_ad_name_key_and_extracts_opid_when_video_id_is_unsafe(tmp_path):
+    csv_path = tmp_path / "youtube_mid_funnel.csv"
+    ad_name = "(OPID-4624155)_Pixel_YouTube_20s_Generic_Vertical_GStore_Imp"
+    pd.DataFrame(
+        {
+            "Ad name": [ad_name],
+            "Video ID": ["3.25846E+11"],
+            "Platform": ["YouTube"],
+            "Objective": ["Video Views"],
+            "Cost": ["80.8"],
+            "Impr.": ["8,189"],
+            "Clicks": [7],
+        }
+    ).to_csv(csv_path, index=False)
+
+    df_raw, df = load_data(
+        str(csv_path),
+        column_mapping={
+            "Ad name": "creative_name",
+            "Video ID": "video_id",
+            "Platform": "platform",
+            "Objective": "objective",
+            "Cost": "spend",
+            "Impr.": "impressions",
+            "Clicks": "clicks",
+        },
+    )
+
+    assert df_raw["creative_name"].iloc[0] == ad_name
+    assert df_raw["ad_name_raw"].iloc[0] == ad_name
+    assert df_raw["ad_id"].iloc[0] == "OPID-4624155"
+    assert df_raw["video_id"].iloc[0] == "3.25846E+11"
+    assert df["creative_name"].iloc[0] == ad_name
+    assert df["ad_id"].iloc[0] == "OPID-4624155"
+    assert df["video_id"].iloc[0] == "3.25846E+11"
+
+
+def test_youtube_mid_funnel_preview_derives_platform_and_objective_without_manual_columns(tmp_path):
+    csv_path = tmp_path / "youtube_mid_funnel.csv"
+    pd.DataFrame(
+        {
+            "Campaign": [
+                "1713870 | Pixel | BR | ESS01 | EMEA | GB | en | Hybrid | YT | COMBO | YT TF | GAds_Arm 1"
+            ],
+            "Ad type": ["Responsive video ad"],
+            "Video ID": ["3.25846E+11"],
+            "Ad name": [
+                "(OPID-4624155)_Flame_GB_YouTube_Video_YouTube_Hyb_HYB_None_In-stream-video_Q1_TF-3.0-Arm-1_Deep-Thoughts_20s_Generic_Vertical_GStore_Imp"
+            ],
+            "Impr.": ["8,189"],
+            "Clicks": ["7"],
+            "Cost": ["80.8"],
+            "TrueView views": ["0"],
+            "TrueView view rate": ["0"],
+            "Engagements": ["0"],
+            "Engagement rate": ["0.00%"],
+            "Video played to 25%": ["96.16%"],
+            "Video played to 50%": ["91.98%"],
+            "Video played to 75%": ["90.03%"],
+            "Video played to 100%": ["88.88%"],
+        }
+    ).to_csv(csv_path, index=False)
+
+    preview = create_best_mapping_preview(str(csv_path))
+
+    assert preview["ready_to_ingest"] is True
+    assert preview["derived_fields"]["platform"]["value"] == "YouTube"
+    assert preview["derived_fields"]["objective"]["value"] == "Target Frequency"
+    assert preview["proposed_mapping"]["Ad name"] == "creative_name"
+    assert preview["proposed_mapping"]["TrueView views"] == "trueview_views"
+    assert preview["proposed_mapping"]["Video played to 100%"] == "video_quartile_p100_rate"
+    assert "platform" not in preview["missing_required_fields"]
+    assert "objective" not in preview["missing_required_fields"]
+    assert any("scientific notation" in warning for warning in preview["warnings"])
+
+
+def test_load_data_derives_youtube_context_and_trueview_eligibility(tmp_path):
+    csv_path = tmp_path / "youtube_mid_funnel.csv"
+    ad_name = "(OPID-4624155)_Flame_GB_YouTube_Video_YouTube_Hyb_HYB_None_In-stream-video_Q1_TF-3.0-Arm-1_Deep-Thoughts_20s_Generic_Vertical_GStore_Imp"
+    pd.DataFrame(
+        {
+            "Campaign": [
+                "1713870 | Pixel | BR | ESS01 | EMEA | GB | en | Hybrid | YT | COMBO | YT TF | GAds_Arm 1",
+                "1713870 | Pixel | BR | ESS01 | EMEA | GB | en | Hybrid | YT | COMBO | YT TF | GAds_Arm 1",
+            ],
+            "Ad type": ["Responsive video ad", "Responsive video ad"],
+            "Video ID": ["3.25846E+11", "3.25846E+11"],
+            "Ad name": [ad_name, ad_name],
+            "Impr.": ["8,189", "18,978"],
+            "Clicks": ["7", "38"],
+            "Cost": ["800.00", "1,218.64"],
+            "TrueView views": ["0", "1,756"],
+            "TrueView view rate": ["0", "23.44%"],
+            "Engagements": ["0", "2,813"],
+            "Engagement rate": ["0.00%", "14.82%"],
+            "Video played to 25%": ["96.16%", "88.24%"],
+            "Video played to 50%": ["91.98%", "65.22%"],
+            "Video played to 75%": ["90.03%", "60.07%"],
+            "Video played to 100%": ["88.88%", "57.17%"],
+        }
+    ).to_csv(csv_path, index=False)
+
+    df_raw, df = load_data(str(csv_path))
+
+    assert set(df_raw["platform"]) == {"YouTube"}
+    assert set(df_raw["objective"]) == {"Target Frequency"}
+    assert set(df_raw["platform_source"]) == {"derived"}
+    assert set(df_raw["objective_source"]) == {"derived"}
+    assert df_raw["ad_id"].iloc[0] == "OPID-4624155"
+    assert df_raw["video_id"].iloc[0] == "3.25846E+11"
+    assert df_raw["trueview_eligible"].tolist() == [False, True]
+    assert df_raw["youtube_measurement_family"].tolist() == [
+        "completion_only",
+        "trueview_eligible",
+    ]
+    assert round(df_raw["completion_rate"].iloc[0], 2) == 88.88
+    assert round(df_raw["trueview_view_rate"].iloc[1], 2) == 23.44
+    assert df["duration_s"].iloc[0] == 20
+    assert bool(df["low_confidence"].iloc[0]) is False
+    assert bool(df["trueview_eligible"].iloc[0]) is True
+    assert df["youtube_measurement_family"].iloc[0] == "mixed"
+    assert round(df["video_quartile_p100_rate"].iloc[0], 2) == 66.73
+    assert "Target Frequency | YouTube" in df["objective"].iloc[0] + " | " + df["platform"].iloc[0]
+
+    scored = score_creatives(df)
+    assert scored["scoring_group"].iloc[0].endswith("| mixed")
 
 
 def test_heuristic_mapping_handles_planner_export_labels(monkeypatch):

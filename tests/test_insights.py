@@ -112,6 +112,15 @@ def test_data_quality_report_has_status_counts_and_warnings():
     assert any("low-confidence" in warning for warning in report["warnings"])
 
 
+def test_data_quality_report_warns_for_small_scoring_cohorts():
+    scored = _scored_df()
+    scored["group_size"] = [2, 2, 9]
+
+    report = get_data_quality_report(_raw_df(), scored)
+
+    assert any("directional only" in warning for warning in report["warnings"])
+
+
 def test_richer_insight_helpers_return_structured_outputs():
     scored = _scored_df()
 
@@ -121,6 +130,36 @@ def test_richer_insight_helpers_return_structured_outputs():
     assert compare_creatives(scored, ["Winner", "Fatigued"])["data"]["winner"] == "Winner"
     assert get_budget_reallocation_recommendations(scored)["data"]["scale_from"][0]["creative_name"] == "Fatigued"
     assert find_actionable_insights(_raw_df(), scored)["data"]["priority_actions"]
+
+
+def test_creative_lookup_treats_names_as_literal_text():
+    creative_name = "(OPID-4624156)_Deep-Thoughts_20s_Generic_Horizontal_Currys_Imp"
+    scored = pd.DataFrame(
+        [
+            {
+                "creative_name": creative_name,
+                "platform": "YouTube",
+                "objective": "Target Frequency",
+                "format_canonical": "Video",
+                "composite_score": 83.2,
+                "primary_kpi_score": 90,
+                "secondary_kpi_score": 75,
+                "cost_efficiency_score": 70,
+                "attention_proxy_score": 80,
+                "frequency": 1.6,
+                "spend": 5000,
+                "reach": 0,
+                "impressions": 160000,
+                "action": "Scale Up",
+                "tier": "Strong",
+                "low_confidence": False,
+                "explanation": "Strong performer.",
+            }
+        ]
+    )
+
+    assert get_score_breakdown(scored, creative_name)["status"] == "ok"
+    assert compare_creatives(scored, [creative_name])["data"]["winner"] == creative_name
 
 
 def test_concept_rankings_roll_up_multiple_creative_rows():

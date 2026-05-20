@@ -7,6 +7,7 @@ import numpy as np
 import re
 import warnings
 
+from src.inference import infer_objective_for_dataframe, infer_platform_for_dataframe
 from src.xlsx_reader import read_xlsx_sheet_dataframe
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,33 @@ def _pick_col(df: pd.DataFrame, candidates: list[str], default=0):
     return pd.Series(default, index=df.index)
 
 
+def _to_numeric(series: pd.Series, default=0) -> pd.Series:
+    """Parse platform-export numeric strings with commas, currency, and percent signs."""
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .str.replace(",", "", regex=False)
+        .str.replace("£", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .replace({"": default, "nan": default, "None": default, "---": default, "-": default})
+    )
+    return pd.to_numeric(cleaned, errors="coerce").fillna(default)
+
+
+def _extract_opid(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.extract(r"\b(OPID-\d+)\b", expand=False).fillna("")
+
+
+def _extract_duration_from_text(series: pd.Series) -> pd.Series:
+    return (
+        series.astype(str)
+        .str.extract(r"(?:^|_|\b)(\d{1,3})s(?:_|$|\b)", expand=False)
+        .astype(float)
+        .fillna(0.0)
+    )
+
+
 def _normalize_pct(series: pd.Series) -> pd.Series:
     """Ensure a rate metric is in 0-100 range (percentage, not decimal).
 
@@ -253,7 +281,7 @@ def parse_duration(val) -> float:
 
 
 def normalize_platform(val) -> str:
-    """Normalise platform labels to 'TikTok' or 'Meta'."""
+    """Normalise platform labels to canonical platform names."""
     if not isinstance(val, str):
         return "Unknown"
     v = val.strip().upper()
@@ -261,6 +289,8 @@ def normalize_platform(val) -> str:
         return "Meta"
     if v in ("TIKTOK", "TT"):
         return "TikTok"
+    if v in ("YOUTUBE", "YT", "GOOGLE - YOUTUBE", "GOOGLE ADS - YOUTUBE"):
+        return "YouTube"
     return val.strip()
 
 
@@ -273,6 +303,8 @@ def normalize_format(val) -> str:
     for canonical, variations in FORMAT_MAPPINGS.items():
         if v in variations:
             return canonical
+    if "video" in v or "trueview" in v or "in-stream" in v or "instream" in v:
+        return "Video"
     return "Unknown"
 
 
@@ -619,12 +651,22 @@ def compute_canonical_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # Calculate as ratio of mid-view to early-view
     if "hold_rate" in df.columns:
         df["canonical_hold_rate"] = df["hold_rate"]
+    elif "video_quartile_p50_rate" in df.columns and df["video_quartile_p50_rate"].notna().any():
+        df["canonical_hold_rate"] = df["video_quartile_p50_rate"]
+    elif "video_quartile_p25_rate" in df.columns and df["video_quartile_p25_rate"].notna().any():
+        df["canonical_hold_rate"] = df["video_quartile_p25_rate"]
     else:
         # Derive from available quartile data if explicit hold_rate not present
         df["canonical_hold_rate"] = pd.Series(float("nan"), index=df.index)
 
-    # Completion rate is platform-agnostic (100% views / impressions)
-    df["canonical_completion_rate"] = df["completion_rate"]
+    # Completion rate is platform-agnostic. Prefer native quartile rate when present.
+    if "video_quartile_p100_rate" in df.columns and df["video_quartile_p100_rate"].notna().any():
+        df["canonical_completion_rate"] = df["video_quartile_p100_rate"].where(
+            df["video_quartile_p100_rate"] > 0,
+            df["completion_rate"],
+        )
+    else:
+        df["canonical_completion_rate"] = df["completion_rate"]
 
     # Engagement rate is platform-agnostic
     df["canonical_engagement_rate"] = df["engagement_rate"]
@@ -888,7 +930,9 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     first_cols = {
+        "ad_id": "first",
         "ad_name_raw": "first",
+        "video_id": "first",
         "format_raw": "first",
         "format": "first",
         "placement_raw": "first",
@@ -900,8 +944,20 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "asset_type_subtype": "first",
         "currency": "first",
         "campaign_raw": "first",
+        "campaign_type": "first",
+        "campaign_subtype": "first",
+        "bid_strategy_type": "first",
+        "optimization_goal": "first",
         "campaign_normalized": "first",
         "objective_normalized": "first",
+        "platform_source": "first",
+        "platform_confidence": "mean",
+        "platform_evidence_strength": "first",
+        "platform_evidence": "first",
+        "objective_source": "first",
+        "objective_confidence": "mean",
+        "objective_evidence_strength": "first",
+        "objective_evidence": "first",
         "concept": "first",
         "product": "first",
         "wave": "first",
@@ -916,6 +972,7 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "impressions": "sum",
         "clicks": "sum",
         "video_views_100": "sum",
+        "trueview_views": "sum",
         "shares": "sum",
         "engagements": "sum",
         "total_plays": "sum",
@@ -926,13 +983,20 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         "performance_score": "mean",
     }
 
-    count_col = {"ad_id": "count"}
     campaign_col = {"campaign_name": "nunique"}
 
     split_cols = {
         "os_target": lambda x: ", ".join(sorted(set(x.dropna()))),
         "device_type": lambda x: ", ".join(sorted(set(x.dropna()))),
         "audience_segment": lambda x: ", ".join(sorted(set(x.dropna()))),
+    }
+    bool_cols = {
+        "trueview_eligible": "max",
+    }
+    family_col = {
+        "youtube_measurement_family": lambda x: (
+            "mixed" if len(set(x.dropna())) > 1 else next(iter(set(x.dropna())), "standard")
+        )
     }
 
     # Vectorised impression-weighted VTR
@@ -947,18 +1011,55 @@ def aggregate_creatives(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
+    weighted_rate_cols = [
+        "trueview_view_rate",
+        "video_quartile_p25_rate",
+        "video_quartile_p50_rate",
+        "video_quartile_p75_rate",
+        "video_quartile_p100_rate",
+    ]
+    rate_aggs = []
+    for col in weighted_rate_cols:
+        if col not in df.columns:
+            continue
+        temp = df[group_cols + [col, "impressions"]].copy()
+        temp[f"{col}_weighted"] = temp[col] * temp["impressions"]
+        rate_aggs.append(
+            temp.groupby(group_cols)[[f"{col}_weighted", "impressions"]]
+            .sum()
+            .assign(**{col: lambda x, c=col: x[f"{c}_weighted"] / x["impressions"].replace(0, float("nan"))})[
+                [col]
+            ]
+            .reset_index()
+        )
+
     agg_dict = {
         **first_cols,
         **sum_cols,
         **mean_cols,
-        **count_col,
         **campaign_col,
         **split_cols,
+        **bool_cols,
+        **family_col,
     }
+    agg_dict = {col: fn for col, fn in agg_dict.items() if col in df.columns}
     agg = df.groupby(group_cols, as_index=False).agg(agg_dict)
-    agg = agg.rename(columns={"ad_id": "n_variants", "campaign_name": "n_campaigns"})
+    variant_counts = (
+        df.groupby(group_cols, as_index=False)
+        .size()
+        .rename(columns={"size": "n_variants"})
+    )
+    agg = agg.rename(columns={"campaign_name": "n_campaigns"})
+    agg = agg.merge(variant_counts, on=group_cols, how="left")
     agg["rows_rolled_up"] = agg["n_variants"]
     agg = agg.merge(vtr_agg, on=group_cols, how="left")
+    for rate_agg in rate_aggs:
+        agg = agg.merge(rate_agg, on=group_cols, how="left", suffixes=("", "_weighted"))
+        for col in weighted_rate_cols:
+            weighted_col = f"{col}_weighted"
+            if weighted_col in agg.columns:
+                agg[col] = agg[weighted_col].combine_first(agg.get(col))
+                agg = agg.drop(columns=[weighted_col])
 
     agg["frequency"] = agg["impressions"] / agg["reach"].replace(0, float("nan"))
 
@@ -1065,9 +1166,41 @@ def normalize_unstructured_dataframe(
     def get_col(candidates, default):
         return _pick_col(mapped_df, candidates, default)
 
-    platform_series = get_col(["platform"], "Unknown").apply(
-        lambda x: normalize_platform(str(x))
+    derived_platform = infer_platform_for_dataframe(mapped_df)
+    derived_objective = infer_objective_for_dataframe(mapped_df)
+
+    platform_input = get_col(["platform"], "")
+    platform_series = platform_input.apply(lambda x: normalize_platform(str(x)))
+    missing_platform = platform_series.astype(str).str.strip().isin(["", "Unknown", "nan", "None"])
+    if derived_platform.value != "Unknown":
+        platform_series.loc[missing_platform] = derived_platform.value
+    platform_source = pd.Series("explicit", index=mapped_df.index)
+    platform_source.loc[missing_platform & (derived_platform.value != "Unknown")] = "derived"
+    platform_confidence = pd.Series(1.0, index=mapped_df.index)
+    platform_confidence.loc[platform_source == "derived"] = derived_platform.confidence
+    platform_confidence.loc[platform_series == "Unknown"] = 0.0
+    platform_evidence_strength = pd.Series("explicit", index=mapped_df.index)
+    platform_evidence_strength.loc[platform_source == "derived"] = (
+        derived_platform.evidence_strength
     )
+    platform_evidence_strength.loc[platform_series == "Unknown"] = "none"
+
+    objective_input = get_col(["objective"], "")
+    objective_series = objective_input.apply(lambda x: normalize_objective(str(x)))
+    missing_objective = objective_series.astype(str).str.strip().isin(["", "Unknown", "nan", "None"])
+    if derived_objective.value != "Unknown":
+        objective_series.loc[missing_objective] = derived_objective.value
+    objective_source = pd.Series("explicit", index=mapped_df.index)
+    objective_source.loc[missing_objective & (derived_objective.value != "Unknown")] = "derived"
+    objective_confidence = pd.Series(1.0, index=mapped_df.index)
+    objective_confidence.loc[objective_source == "derived"] = derived_objective.confidence
+    objective_confidence.loc[objective_series == "Unknown"] = 0.0
+    objective_evidence_strength = pd.Series("explicit", index=mapped_df.index)
+    objective_evidence_strength.loc[objective_source == "derived"] = (
+        derived_objective.evidence_strength
+    )
+    objective_evidence_strength.loc[objective_series == "Unknown"] = "none"
+
     format_raw = get_col(["format_raw"], "Unknown").astype(str)
     format_normalized = format_raw.apply(normalize_format)
     placement_raw = get_col(["placement_raw"], "Unknown").astype(str)
@@ -1080,14 +1213,19 @@ def normalize_unstructured_dataframe(
     )
 
     vtr_raw = _normalize_pct(
-        pd.to_numeric(get_col(["vtr_2s"], 0), errors="coerce").fillna(0)
+        _to_numeric(get_col(["vtr_2s"], 0), default=0)
     )
+    trueview_view_rate = _normalize_pct(
+        _to_numeric(get_col(["trueview_view_rate"], 0), default=0)
+    )
+    vtr_raw = vtr_raw.where(vtr_raw > 0, trueview_view_rate)
     asset_type_raw = get_col(["asset_type_raw"], "BAU").astype(str)
 
     normalized = pd.DataFrame(
         {
             "ad_name_raw": get_col(["ad_name_raw"], "").astype(str),
             "ad_id": get_col(["ad_id"], "").astype(str),
+            "video_id": get_col(["video_id"], "").astype(str),
             "creative_name": get_col(["creative_name"], "")
             .astype(str)
             .replace("", "Unknown Creative")
@@ -1102,6 +1240,10 @@ def normalize_unstructured_dataframe(
             "placement_canonical": placement_normalized,
             "campaign_name": get_col(["campaign_raw"], "").astype(str),
             "campaign_raw": get_col(["campaign_raw"], "").astype(str),
+            "campaign_type": get_col(["campaign_type"], "").astype(str),
+            "campaign_subtype": get_col(["campaign_subtype"], "").astype(str),
+            "bid_strategy_type": get_col(["bid_strategy_type"], "").astype(str),
+            "optimization_goal": get_col(["optimization_goal"], "").astype(str),
             "campaign_normalized": get_col(["campaign_raw"], "")
             .astype(str)
             .apply(
@@ -1109,39 +1251,47 @@ def normalize_unstructured_dataframe(
                 if pd.notna(x) and str(x).strip()
                 else "Unknown"
             ),
-            "objective": get_col(["objective"], "Unknown").apply(
-                lambda x: normalize_objective(str(x))
-            ),
-            "objective_normalized": get_col(["objective"], "Unknown").apply(
-                lambda x: normalize_objective(str(x))
-            ),
+            "platform_source": platform_source,
+            "platform_confidence": platform_confidence,
+            "platform_evidence_strength": platform_evidence_strength,
+            "platform_evidence": derived_platform.evidence,
+            "objective": objective_series,
+            "objective_normalized": objective_series,
+            "objective_source": objective_source,
+            "objective_confidence": objective_confidence,
+            "objective_evidence_strength": objective_evidence_strength,
+            "objective_evidence": derived_objective.evidence,
             "buying_type": get_col(["buying_type"], "Paid")
             .astype(str)
             .replace("nan", "Paid")
             .replace("", "Paid"),
-            "reach": pd.to_numeric(get_col(["reach"], 0), errors="coerce").fillna(0),
-            "impressions": pd.to_numeric(
-                get_col(["impressions"], 0), errors="coerce"
-            ).fillna(0),
-            "frequency": pd.to_numeric(
-                get_col(["frequency"], 0), errors="coerce"
-            ).fillna(0),
-            "spend": pd.to_numeric(get_col(["spend"], 0), errors="coerce").fillna(0),
-            "cpm": pd.to_numeric(get_col(["cpm"], 0), errors="coerce").fillna(0),
-            "clicks": pd.to_numeric(get_col(["clicks"], 0), errors="coerce").fillna(0),
+            "reach": _to_numeric(get_col(["reach"], 0), default=0),
+            "impressions": _to_numeric(get_col(["impressions"], 0), default=0),
+            "frequency": _to_numeric(get_col(["frequency"], 0), default=0),
+            "spend": _to_numeric(get_col(["spend"], 0), default=0),
+            "cpm": _to_numeric(get_col(["cpm"], 0), default=0),
+            "clicks": _to_numeric(get_col(["clicks"], 0), default=0),
             "vtr_2s": vtr_raw,
-            "video_views_100": pd.to_numeric(
-                get_col(["video_views_100"], 0), errors="coerce"
-            ).fillna(0),
-            "shares": pd.to_numeric(get_col(["shares"], 0), errors="coerce").fillna(0),
-            "engagements": pd.to_numeric(
-                get_col(["engagements"], 0), errors="coerce"
-            ).fillna(0),
+            "video_views_100": _to_numeric(get_col(["video_views_100"], 0), default=0),
+            "trueview_views": _to_numeric(get_col(["trueview_views"], 0), default=0),
+            "trueview_view_rate": trueview_view_rate,
+            "video_quartile_p25_rate": _normalize_pct(
+                _to_numeric(get_col(["video_quartile_p25_rate"], 0), default=0)
+            ),
+            "video_quartile_p50_rate": _normalize_pct(
+                _to_numeric(get_col(["video_quartile_p50_rate"], 0), default=0)
+            ),
+            "video_quartile_p75_rate": _normalize_pct(
+                _to_numeric(get_col(["video_quartile_p75_rate"], 0), default=0)
+            ),
+            "video_quartile_p100_rate": _normalize_pct(
+                _to_numeric(get_col(["video_quartile_p100_rate"], 0), default=0)
+            ),
+            "shares": _to_numeric(get_col(["shares"], 0), default=0),
+            "engagements": _to_numeric(get_col(["engagements"], 0), default=0),
             "duration_s": get_col(["duration_s"], "").apply(parse_duration),
             "ad_status": "Active",
-            "total_plays": pd.to_numeric(
-                get_col(["total_plays"], 0), errors="coerce"
-            ).fillna(0),
+            "total_plays": _to_numeric(get_col(["total_plays"], 0), default=0),
             "asset_type_raw": asset_type_raw,
             "asset_type_canonical": asset_type_raw.apply(normalize_asset_type_canonical),
             "asset_type_subtype": asset_type_raw.apply(extract_asset_subtype),
@@ -1171,6 +1321,43 @@ def normalize_unstructured_dataframe(
         }
     )
 
+    missing_ad_name = normalized["ad_name_raw"].str.strip().isin(["", "nan", "None"])
+    normalized.loc[missing_ad_name, "ad_name_raw"] = normalized.loc[
+        missing_ad_name, "creative_name"
+    ]
+    extracted_opid = _extract_opid(
+        normalized["ad_name_raw"].where(
+            normalized["ad_name_raw"].str.strip() != "",
+            normalized["creative_name"],
+        )
+    )
+    missing_ad_id = normalized["ad_id"].str.strip().isin(["", "nan", "None"])
+    normalized.loc[missing_ad_id, "ad_id"] = extracted_opid[missing_ad_id]
+
+    missing_duration = normalized["duration_s"] <= 0
+    normalized.loc[missing_duration, "duration_s"] = _extract_duration_from_text(
+        normalized.loc[missing_duration, "ad_name_raw"].where(
+            normalized.loc[missing_duration, "ad_name_raw"].str.strip() != "",
+            normalized.loc[missing_duration, "creative_name"],
+        )
+    )
+
+    normalized["trueview_eligible"] = (
+        (normalized["trueview_views"] > 0) | (normalized["trueview_view_rate"] > 0)
+    )
+    has_completion_signal = normalized["video_quartile_p100_rate"] > 0
+    normalized["youtube_measurement_family"] = "standard"
+    normalized.loc[
+        normalized["platform"].eq("YouTube") & normalized["trueview_eligible"],
+        "youtube_measurement_family",
+    ] = "trueview_eligible"
+    normalized.loc[
+        normalized["platform"].eq("YouTube")
+        & ~normalized["trueview_eligible"]
+        & has_completion_signal,
+        "youtube_measurement_family",
+    ] = "completion_only"
+
     normalized = normalized[normalized["creative_name"] != "Unknown Creative"]
     normalized = normalized[(normalized["spend"] > 0) | (normalized["impressions"] > 0)]
     for source_column in preserve_columns or []:
@@ -1190,6 +1377,11 @@ def _load_unstructured_frames(
     if column_mapping is None:
         try:
             from src.llm_mapper import generate_column_mapping
+            from src.data_mapping import (
+                infer_alias_mapping,
+                merge_mapping_candidates,
+                REQUIRED_FIELDS,
+            )
         except ImportError:
             raise ValueError(
                 "llm_mapper module not found. Cannot process unstructured data."
@@ -1198,7 +1390,14 @@ def _load_unstructured_frames(
     for _, df_sheet in candidates:
         if df_sheet.empty or len(df_sheet.columns) < 3:
             continue
-        mapping = column_mapping or generate_column_mapping(df_sheet)
+        if column_mapping is not None:
+            mapping = column_mapping
+        else:
+            mapping = infer_alias_mapping(df_sheet)
+            if not all(field in mapping.values() for field in REQUIRED_FIELDS):
+                mapping = merge_mapping_candidates(
+                    mapping, generate_column_mapping(df_sheet)
+                )
         normalized = normalize_unstructured_dataframe(
             df_sheet,
             mapping,
@@ -1297,7 +1496,17 @@ def load_data(
     if path.suffix.lower() == ".csv":
         frames.extend(
             _load_unstructured_frames(
-                [(path.stem, pd.read_csv(filepath))],
+                [
+                    (
+                        path.stem,
+                        pd.read_csv(
+                            filepath,
+                            header=(int(header_row) - 1) if header_row else 0,
+                            dtype=str,
+                            keep_default_na=False,
+                        ),
+                    )
+                ],
                 column_mapping=column_mapping,
                 preserve_columns=preserve_columns,
             )
@@ -1344,7 +1553,14 @@ def load_data(
 
     # Per-ad-line derived metrics (needed before aggregation)
     imp_raw = df_raw["impressions"].replace(0, float("nan"))
-    df_raw["completion_rate"] = (df_raw["video_views_100"] / imp_raw) * 100
+    completion_from_counts = (df_raw["video_views_100"] / imp_raw) * 100
+    if "video_quartile_p100_rate" in df_raw.columns:
+        df_raw["completion_rate"] = df_raw["video_quartile_p100_rate"].where(
+            df_raw["video_quartile_p100_rate"] > 0,
+            completion_from_counts,
+        )
+    else:
+        df_raw["completion_rate"] = completion_from_counts
     df_raw["ctr"] = (df_raw["clicks"] / imp_raw) * 100
     df_raw["engagement_rate"] = (df_raw["engagements"] / imp_raw) * 100
 
@@ -1359,7 +1575,14 @@ def load_data(
 
     # Recompute derived metrics on aggregated data
     imp = df["impressions"].replace(0, float("nan"))
-    df["completion_rate"] = (df["video_views_100"] / imp) * 100
+    completion_from_counts = (df["video_views_100"] / imp) * 100
+    if "video_quartile_p100_rate" in df.columns:
+        df["completion_rate"] = df["video_quartile_p100_rate"].where(
+            df["video_quartile_p100_rate"] > 0,
+            completion_from_counts,
+        )
+    else:
+        df["completion_rate"] = completion_from_counts
     df["ctr"] = (df["clicks"] / imp) * 100
     df["engagement_rate"] = (df["engagements"] / imp) * 100
     df["share_rate"] = (df["shares"] / imp) * 100
@@ -1376,7 +1599,10 @@ def load_data(
     df = compute_duration_adjusted_completion(df)
     df = compute_audience_consistency(df_raw, df)
 
-    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+    reach_available = df["reach"] > 0
+    df["low_confidence"] = (df["spend"] < 500) | (
+        reach_available & (df["reach"] < 10000)
+    )
 
     name_to_platforms = (
         df_raw.groupby("creative_name")["platform"]
@@ -1445,7 +1671,10 @@ def _finish_loaded_frames(frames: list[pd.DataFrame]) -> tuple[pd.DataFrame, pd.
     df = compute_duration_adjusted_completion(df)
     df = compute_audience_consistency(df_raw, df)
 
-    df["low_confidence"] = (df["spend"] < 500) | (df["reach"] < 10000)
+    reach_available = df["reach"] > 0
+    df["low_confidence"] = (df["spend"] < 500) | (
+        reach_available & (df["reach"] < 10000)
+    )
 
     name_to_platforms = (
         df_raw.groupby("creative_name")["platform"]

@@ -3,6 +3,7 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from src.inference import infer_objective_for_dataframe, infer_platform_for_dataframe
 from src.xlsx_reader import read_xlsx_sheet_dataframe
 
 
@@ -33,12 +34,30 @@ TARGET_FIELDS = {
     "product": "Product or product family label.",
     "wave": "Campaign wave or flight label.",
     "performance_score": "Workbook-provided score or performance index to preserve alongside Scout's composite_score.",
+    "ad_id": "Stable ad or asset identifier when available, for example OPID or platform asset key.",
+    "video_id": "Platform video identifier kept as metadata; not used as the primary creative key unless exact text is available.",
+    "campaign_type": "Native platform campaign type or advertising channel type.",
+    "campaign_subtype": "Native platform campaign subtype or advertising channel subtype.",
+    "bid_strategy_type": "Native platform bid strategy type.",
+    "optimization_goal": "Native platform optimization goal or campaign goal.",
+    "trueview_views": "Google Ads TrueView view count.",
+    "trueview_view_rate": "Google Ads TrueView view rate over view-eligible impressions.",
+    "video_quartile_p25_rate": "Video played to 25% rate.",
+    "video_quartile_p50_rate": "Video played to 50% rate.",
+    "video_quartile_p75_rate": "Video played to 75% rate.",
+    "video_quartile_p100_rate": "Video played to 100% rate.",
 }
 
 REQUIRED_FIELDS = ["creative_name", "platform", "objective", "spend", "impressions"]
 OUTCOME_FIELDS = ["reach", "clicks", "vtr_2s", "video_views_100", "engagements", "shares"]
 METADATA_FIELDS = {
+    "ad_id",
     "ad_name_raw",
+    "video_id",
+    "campaign_type",
+    "campaign_subtype",
+    "bid_strategy_type",
+    "optimization_goal",
     "format_raw",
     "placement_raw",
     "campaign_raw",
@@ -57,7 +76,7 @@ FIELD_ALIASES = {
     "platform": ["platform", "publisher", "channel"],
     "objective": ["objective", "campaign objective", "buying objective"],
     "spend": ["spend", "spends", "cost", "amount spent", "media spend"],
-    "impressions": ["impressions", "imps"],
+    "impressions": ["impressions", "imps", "impr."],
     "reach": ["reach", "unique reach", "people reached"],
     "frequency": ["frequency", "freq"],
     "cpm": ["cpm", "cost per mille"],
@@ -70,7 +89,7 @@ FIELD_ALIASES = {
     "format_raw": ["format", "asset format", "format type"],
     "placement_raw": ["placement", "where it ran"],
     "campaign_raw": ["campaign", "campaign name"],
-    "ad_name_raw": ["ad", "ad name", "variant"],
+    "ad_name_raw": ["raw ad name", "ad variant", "variant"],
     "buying_type": ["buying type", "buying method", "paid or boosting"],
     "asset_type_raw": ["asset type", "creator type", "partner"],
     "os_target": ["os", "operating system", "device os"],
@@ -85,6 +104,18 @@ FIELD_ALIASES = {
         "creative efficiency index",
         "efficiency index",
     ],
+    "ad_id": ["ad id", "asset id", "opid", "consolidated asset key"],
+    "video_id": ["video id", "youtube video id", "yt video id"],
+    "campaign_type": ["campaign type", "advertising channel type"],
+    "campaign_subtype": ["campaign subtype", "advertising channel subtype"],
+    "bid_strategy_type": ["bid strategy type", "bidding strategy type"],
+    "optimization_goal": ["optimization goal", "campaign goal", "goal type"],
+    "trueview_views": ["trueview views", "true view views"],
+    "trueview_view_rate": ["trueview view rate", "true view view rate"],
+    "video_quartile_p25_rate": ["video played to 25%", "25% video played", "video quartile 25%"],
+    "video_quartile_p50_rate": ["video played to 50%", "50% video played", "video quartile 50%"],
+    "video_quartile_p75_rate": ["video played to 75%", "75% video played", "video quartile 75%"],
+    "video_quartile_p100_rate": ["video played to 100%", "100% video played", "video quartile 100%"],
 }
 
 
@@ -146,6 +177,20 @@ def infer_alias_mapping(df: pd.DataFrame) -> dict[str, str]:
     return mapping
 
 
+def merge_mapping_candidates(alias_mapping: dict[str, str], provider_mapping: dict[str, str]) -> dict[str, str]:
+    """Merge deterministic aliases with provider mappings without losing required fields."""
+    merged = dict(alias_mapping)
+    for source, provider_target in provider_mapping.items():
+        alias_target = merged.get(source)
+        if alias_target is None:
+            if provider_target not in merged.values():
+                merged[source] = provider_target
+            continue
+        if provider_target in REQUIRED_FIELDS and alias_target not in REQUIRED_FIELDS:
+            merged[source] = provider_target
+    return merged
+
+
 def _normalise_label(value) -> str:
     return " ".join(str(value or "").strip().replace("\n", " ").replace("_", " ").lower().split())
 
@@ -203,6 +248,20 @@ def create_mapping_preview(
     sample_rows = _sample_normalized_rows(df, valid_mapping)
 
     warnings = []
+    derived_fields = {}
+    platform_inferred = None
+    objective_inferred = None
+    if "platform" not in mapped_targets:
+        platform_inferred = infer_platform_for_dataframe(df)
+        if platform_inferred.value != "Unknown":
+            mapped_targets.add("platform")
+            derived_fields["platform"] = platform_inferred.to_preview_dict()
+    if "objective" not in mapped_targets:
+        objective_inferred = infer_objective_for_dataframe(df)
+        if objective_inferred.value != "Unknown":
+            mapped_targets.add("objective")
+            derived_fields["objective"] = objective_inferred.to_preview_dict()
+
     missing_required = [
         field for field in REQUIRED_FIELDS if field not in mapped_targets
     ]
@@ -226,6 +285,17 @@ def create_mapping_preview(
         warnings.append(
             "Multiple source columns map to: " + ", ".join(ambiguous_targets)
         )
+
+    video_id_source = next(
+        (source for source, target in valid_mapping.items() if target == "video_id"),
+        None,
+    )
+    if video_id_source is not None:
+        video_id_values = _column_series(df, video_id_source).dropna().astype(str)
+        if video_id_values.str.contains(r"^\s*\d+(?:\.\d+)?e\+\d+\s*$", case=False, regex=True).any():
+            warnings.append(
+                "Video ID appears in scientific notation; use creative_name/ad_id as the stable key unless exact text IDs are supplied."
+            )
 
     confidence_by_field = {}
     for source, target in valid_mapping.items():
@@ -276,6 +346,7 @@ def create_mapping_preview(
         "canonical_mapped_fields": canonical_mapped_fields,
         "preserved_metadata_fields": preserved_metadata_fields,
         "preserved_custom_columns": preserved_custom_columns,
+        "derived_fields": derived_fields,
         "missing_required_fields": missing_required,
         "ambiguous_targets": ambiguous_targets,
         "ignored_columns": [
@@ -295,7 +366,7 @@ def iter_candidate_dataframes(filepath: str) -> list[tuple[str, pd.DataFrame]]:
     path = Path(filepath)
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        return [(path.stem, pd.read_csv(path))]
+        return [(path.stem, pd.read_csv(path, dtype=str, keep_default_na=False))]
 
     xl = pd.ExcelFile(filepath)
     frames = []
@@ -315,7 +386,12 @@ def read_selected_dataframe(
 ) -> tuple[str, pd.DataFrame]:
     path = Path(filepath)
     if path.suffix.lower() == ".csv":
-        return path.stem, pd.read_csv(path, header=(header_row - 1) if header_row else 0)
+        return path.stem, pd.read_csv(
+            path,
+            header=(header_row - 1) if header_row else 0,
+            dtype=str,
+            keep_default_na=False,
+        )
 
     xl = pd.ExcelFile(filepath)
     selected_sheet = sheet_name or xl.sheet_names[0]
@@ -422,7 +498,7 @@ def create_best_mapping_preview_from_sheets(
     for sheet_name, df in iter_candidate_dataframes_from_sheets(sheets):
         mapping = infer_alias_mapping(df)
         if not all(field in mapping.values() for field in REQUIRED_FIELDS):
-            mapping = {**mapping, **mapping_provider(df)}
+            mapping = merge_mapping_candidates(mapping, mapping_provider(df))
         previews.append(create_mapping_preview(df, sheet_name, mapping))
 
     if not previews:
@@ -459,7 +535,7 @@ def create_best_mapping_preview(
     for sheet_name, df in candidates:
         mapping = infer_alias_mapping(df)
         if not all(field in mapping.values() for field in REQUIRED_FIELDS):
-            mapping = {**mapping, **mapping_provider(df)}
+            mapping = merge_mapping_candidates(mapping, mapping_provider(df))
         preview = create_mapping_preview(
             df,
             sheet_name,

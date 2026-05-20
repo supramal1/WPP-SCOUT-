@@ -15,9 +15,9 @@
                   placement truth + concept rollups + action plans
 ```
 
-WPP Scout is an MCP-first backend for analyzing paid social creative performance. It ingests Meta and TikTok campaign exports, maps them into a canonical schema, scores creatives against objective-specific KPIs, and exposes the analysis through MCP tools for an agent to query.
+WPP Scout is an MCP-first backend for analyzing paid social and YouTube creative performance. It ingests campaign exports, maps them into a canonical schema, scores creatives against objective-specific KPIs, and exposes the analysis through MCP tools for an agent to query.
 
-The intended user experience is: a non-technical user asks a chat agent a campaign-performance question, and the agent calls WPP Scout MCP tools to ingest data, inspect quality, rank creatives, compare concepts, explain performance, and recommend action.
+The intended user experience is: a non-technical user asks a chat agent a campaign-performance question, and the agent calls WPP Scout MCP tools to ingest data, inspect quality, rank creatives, compare concepts, explain performance, and surface caveated recommendations for human review.
 
 There is no bundled web frontend in this repo. The optional FastAPI app remains as a local/API harness for health checks, browser-upload style JSON payloads, mapping preview, and scoring routes.
 
@@ -28,8 +28,53 @@ There is no bundled web frontend in this repo. The optional FastAPI app remains 
 - Primary runtime: `mcp_server.py`
 - Optional API runtime: `api/main.py`
 - Supported source formats: Pixel DE-style Excel workbooks, generic CSV, generic Excel exports
+- Current validated campaign shape: YouTube mid-funnel / Target Frequency exports with Google Ads-style fields such as `Ad name`, `Impr.`, `Cost`, `TrueView views`, `TrueView view rate`, and video quartile rates
 - AI mapping layer: Gemini via Vertex AI using Google Application Default Credentials, with a heuristic fallback
-- Planned hosting: GCP/Cloud Run, not required for local development
+- Current prototype hosting: Google Cloud Run, service `wpp-scout-mcp`, region `europe-west2`
+- Current ready revision checked on 2026-05-20: `wpp-scout-mcp-00020-9mb`, 100% traffic
+- Current hosted endpoint: `https://wpp-scout-mcp-34862349933.europe-west2.run.app`
+- Infrastructure caveat: this prototype is not hosted on WPP infrastructure. Do not treat it as WPP-approved production infrastructure until it has been migrated or reviewed through the required WPP security, data, and procurement process.
+
+## WPP Technical Lead Handover Summary
+
+This repo currently contains a working MCP prototype and a deployed Cloud Run instance. It should be treated as a development/prototype service until WPP ownership, hosting, auth, data handling, and support model are agreed.
+
+What is implemented:
+
+1. MCP upload-first workflow for remote agents: chunk upload, upload status, finalize, mapping preview, ingest, session-based query tools.
+2. Canonical mapping layer for standard and non-standard CSV/XLS/XLSX exports, with deterministic aliases, optional Gemini mapping, and heuristic fallback.
+3. YouTube Target Frequency support:
+   - derives `platform=YouTube` and `objective=Target Frequency` from strong campaign taxonomy / TrueView evidence when those columns are missing;
+   - preserves unsafe/scientific-notation video IDs as metadata rather than using them as the primary creative key;
+   - extracts OPID-style IDs from ad names where available;
+   - separates TrueView-eligible rows from completion-only rows through `youtube_measurement_family`.
+4. Scoring contract:
+   - `creative_quality_score` is the default headline ranking metric for `rank_creatives`;
+   - `media_efficiency_overlay_score` shows the cost-efficiency component;
+   - `combined_scout_score` is the blended creative + media-efficiency score;
+   - `composite_score` is retained as a legacy alias for the blended score.
+5. Row-level audit fields:
+   - `methodology_version`;
+   - `source_grain`;
+   - `scoring_group`;
+   - `group_size`;
+   - `rank_in_group`;
+   - `directional_only`;
+   - `score_caveats`.
+6. Guardrails:
+   - small scoring cohorts are flagged as directional;
+   - missing creative-level reach/frequency does not trigger a frequency penalty;
+   - missing reach is not treated as zero reach for low-confidence checks;
+   - Scout outputs should be treated as diagnostic, not causal or autonomous budget/planning decisions.
+
+Recommended handover checks:
+
+1. Confirm target deployment environment and owner. The current Cloud Run project is not WPP infrastructure.
+2. Add authentication/authorization before any public or client-facing exposure.
+3. Confirm WPP data classification requirements before processing WPP/client confidential data.
+4. Decide whether session state should remain in process memory or move to Redis, Firestore, Cloud Storage, or another WPP-approved store.
+5. Ask analytics to validate goal, metrics, comparison groups, weighting, caveats, and explanation language before treating the methodology as signed off.
+6. Decide whether budget/planning/reallocation outputs are in scope. Current recommendation is to keep V0.1 diagnostic and human-reviewed.
 
 ## Repository Layout
 
@@ -39,8 +84,9 @@ There is no bundled web frontend in this repo. The optional FastAPI app remains 
 | `main.py` | CLI workflow for local Excel report generation. |
 | `src/loader.py` | Standard workbook loading, mapped data loading, normalization, aggregation. |
 | `src/data_mapping.py` | Mapping preview workflow and canonical schema definitions. |
+| `src/inference.py` | Rule-based platform/objective inference for mapped exports with auditable evidence labels. |
 | `src/llm_mapper.py` | Gemini/Vertex column-mapping layer with heuristic fallback. |
-| `src/scorer.py` | Objective-specific scoring algorithm, confidence, fatigue, tiers, actions. |
+| `src/scorer.py` | Objective-specific scoring algorithm, score contract, confidence, fatigue, tiers, actions. |
 | `src/explainer.py` | Plain-English creative explanations and dimension trend summaries. |
 | `src/insights.py` | Data-quality, concept, fatigue, budget, comparison, and action-plan helpers. |
 | `src/reporter.py` | Optional CLI Excel/Looker-style exports. |
@@ -68,7 +114,7 @@ Useful docs:
 Create a virtual environment and install the root dependencies:
 
 ```bash
-cd /Users/malik.james-williams/Desktop/CreativeAnalyser
+cd /path/to/WPP-SCOUT-
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
@@ -106,7 +152,7 @@ MCP smoke passed: 2 creatives, 0 priority action(s)
 Run the full test suite:
 
 ```bash
-python3 -m pytest api/tests tests -q
+PYTHONPATH=. python3 -m pytest -q
 ```
 
 Optional syntax/import check:
@@ -128,9 +174,25 @@ Local SSE endpoints:
 | Endpoint | Purpose |
 |---|---|
 | `http://localhost:8765/sse` | MCP SSE connection endpoint. |
+| `http://localhost:8765/mcp` | Streamable HTTP MCP endpoint. |
 | `http://localhost:8765/messages` | MCP message POST endpoint used by the SSE transport. |
 
 The MCP server stores analyzed data in process memory. `ingest_data` always returns a `session_id`; pass it into later tools. If a query omits `session_id`, Scout can still use the active session, but the response includes a warning and session summary. Strict agents should pass `require_session_id: true`.
+
+## Current Prototype Deployment
+
+The current prototype is deployed to Cloud Run for MCP integration testing:
+
+| Item | Value |
+|---|---|
+| Service | `wpp-scout-mcp` |
+| Region | `europe-west2` |
+| Public URL | `https://wpp-scout-mcp-34862349933.europe-west2.run.app` |
+| MCP paths | `/sse` and `/mcp` |
+| Current ready revision checked on 2026-05-20 | `wpp-scout-mcp-00020-9mb` |
+| Traffic | 100% to latest ready revision |
+
+Operational caveat: this is a prototype deployment and is not currently WPP-owned infrastructure. Before production or client-sensitive usage, migrate to an approved WPP environment or complete the required security, data, and infrastructure review.
 
 ## MCP Data Ingest Workflow
 
@@ -189,8 +251,8 @@ Useful MCP tools:
 | `finalize_file_upload` | Decodes the uploaded chunks and returns a reusable `upload_id` / `file_handle`. |
 | `preview_data_mapping` | Returns proposed column mapping, diagnostics, schema, and sample normalized rows before scoring. |
 | `ingest_data` | Scores the finalized upload or file once the mapping has been confirmed. |
-| `rank_creatives` | Post-ingest ranking by any numeric metric, including Scout `composite_score` or workbook `performance_score`. |
-| `describe_session` | Summarizes an ingested session, including row counts, available metrics/group-by fields, distributions, mapping context, and warnings. |
+| `rank_creatives` | Post-ingest ranking. Defaults to Scout `creative_quality_score`; can also rank by `combined_scout_score`, legacy `composite_score`, workbook `performance_score`, spend, reach, or any numeric metric. |
+| `describe_session` | Summarizes an ingested session, including row counts, available metrics/group-by fields, distributions, mapping context, score contract, methodology version, and warnings. |
 
 Workbook parsing options accepted by `preview_data_mapping` and `ingest_data`:
 
@@ -204,7 +266,7 @@ For `.xlsx` files, Scout reads actual worksheet XML when normal pandas/openpyxl 
 
 Workbook-provided scoring:
 
-Map columns such as `Creative Efficiency Index`, `Performance Score`, or `Performance Index` to `performance_score`. Scout preserves this alongside its own `composite_score`, and `rank_creatives` can rank by either metric.
+Map columns such as `Creative Efficiency Index`, `Performance Score`, or `Performance Index` to `performance_score`. Scout preserves this alongside its own score fields. Use `creative_quality_score` for the default creative diagnostic ranking, `combined_scout_score` / `composite_score` for the blended Scout score, and `performance_score` when matching a workbook-provided score exactly.
 
 ## Optional FastAPI Harness
 
@@ -310,11 +372,17 @@ These are the fields that the mapping layer can target.
 | Field | Required | Description |
 |---|---|---|
 | `creative_name` | yes | Overarching creative/concept row name used for scoring and rollups. |
-| `platform` | yes | Platform, normally `Meta` or `TikTok`. |
+| `platform` | yes | Platform, normally `Meta`, `TikTok`, or `YouTube`. Can be derived when strong evidence exists. |
 | `objective` | yes | Campaign objective, normalized to values such as `Awareness`, `Reach`, `Traffic`, `Engagement`, `Sales`, `Target Frequency`, or `Video Views`. |
 | `spend` | yes | Total spend. |
 | `impressions` | yes | Total ad impressions. |
+| `ad_id` | no | Stable ad/asset identifier when available, for example OPID extracted from `Ad name`. |
+| `video_id` | no | Platform video identifier retained as metadata. Scientific-notation IDs are not trusted as the primary creative key. |
 | `ad_name_raw` | no | Raw ad variant name. |
+| `campaign_type` | no | Native platform campaign type or advertising channel type. |
+| `campaign_subtype` | no | Native platform campaign subtype or advertising channel subtype. |
+| `bid_strategy_type` | no | Native platform bid strategy type. |
+| `optimization_goal` | no | Native platform optimization goal or campaign goal. |
 | `format_raw` | no | Raw asset format. |
 | `placement_raw` | no | Raw placement. |
 | `campaign_raw` | no | Raw campaign name. |
@@ -325,6 +393,12 @@ These are the fields that the mapping layer can target.
 | `clicks` | no | Total clicks. |
 | `vtr_2s` | no | Early attention rate. Meta 3s VTR and TikTok 2s VTR both map here. |
 | `video_views_100` | no | 100% video completions. |
+| `trueview_views` | no | Google Ads TrueView view count. |
+| `trueview_view_rate` | no | Google Ads TrueView view rate over eligible impressions. |
+| `video_quartile_p25_rate` | no | Video played to 25% rate. |
+| `video_quartile_p50_rate` | no | Video played to 50% rate. |
+| `video_quartile_p75_rate` | no | Video played to 75% rate. |
+| `video_quartile_p100_rate` | no | Video played to 100% rate. |
 | `shares` | no | Total shares. |
 | `engagements` | no | Total engagements/interactions. |
 | `duration_s` | no | Video duration in seconds. |
@@ -334,9 +408,11 @@ These are the fields that the mapping layer can target.
 | `concept` | no | Creative concept rollup label. If missing, concept tools fall back to `creative_name`. |
 | `product` | no | Product label for enrichment/filtering. |
 | `wave` | no | Campaign wave label for enrichment/filtering. |
-| `performance_score` | no | Workbook-provided score or performance index, such as `Creative Efficiency Index`; preserved separately from Scout `composite_score`. |
+| `performance_score` | no | Workbook-provided score or performance index, such as `Creative Efficiency Index`; preserved separately from Scout-generated score fields. |
 
 Required fields are minimal so WPP Scout can ingest a wide range of exports. Better optional metric coverage produces better scoring and explanations.
+
+If `platform` or `objective` is missing, Scout can derive it only when the export contains clear evidence. The mapping preview returns `derived_fields` with `value`, `source`, `evidence_strength`, and `evidence`; `evidence_strength` is an audit label, not a statistical confidence score.
 
 ## MCP Tool Catalog
 
@@ -352,8 +428,8 @@ All tools return text content. Most structured tools return JSON as the text bod
 | `preview_data_mapping` | `upload_id` or small-file `file_data_base64`, optional `sheet_name`, `header_row`, `preserve_columns` | Preview how a CSV/Excel upload maps to the canonical schema. Returns `mapping_id`, `proposed_mapping`, diagnostics, missing fields, ignored columns, preserved metadata, warnings, and sample normalized rows. |
 | `ingest_data` | `upload_id` or small-file `file_data_base64`, optional `min_spend`, `min_reach`, `mapping_id`, `column_mapping`, `session_id`, `preserve_columns` | Load, normalize, aggregate, score, explain, and store an analysis session. Returns `session_id` and analyzed creative count. |
 | `analyze_creatives` | same file inputs as `ingest_data` | Legacy alias for `ingest_data`. |
-| `describe_session` | optional `session_id` | Session row counts, available metrics/groupings, distributions, mapping context, and warnings. |
-| `rank_creatives` | optional `session_id`, `metric`, `group_by`, `top_n`, `bottom_n`, `min_spend` | Rank creatives or grouped cohorts by any numeric metric, including `spend`. |
+| `describe_session` | optional `session_id` | Session row counts, available metrics/groupings, distributions, mapping context, score contract, methodology version, and warnings. |
+| `rank_creatives` | optional `session_id`, `metric`, `group_by`, `top_n`, `bottom_n`, `min_spend` | Rank creatives or grouped cohorts. Defaults to `creative_quality_score`; can rank by any numeric metric, including `combined_scout_score`, `composite_score`, `performance_score`, or `spend`. |
 | `get_top_performers` | optional `session_id`, `limit`, `platform`, `objective` | Top high-confidence creative rows by composite score. |
 | `get_bottom_performers` | optional `session_id`, `limit`, `platform` | Lowest high-confidence creative rows by composite score. |
 | `get_top_concepts` | optional `session_id`, `limit`, `platform`, `objective`, `include_low_confidence` | Top concept-level rollups across creative/placement rows. |
@@ -371,8 +447,29 @@ All tools return text content. Most structured tools return JSON as the text bod
 | `get_low_confidence_creatives` | optional `session_id`, `limit` | Rows below spend/reach confidence thresholds. |
 | `get_fatigue_risks` | optional `session_id`, `limit` | Rows with high frequency, sorted by frequency and spend. |
 | `compare_creatives` | `creative_names`, optional `session_id` | Compares named creatives and identifies the strongest score. |
-| `get_budget_reallocation_recommendations` | optional `session_id`, `limit` | Structured `scale_to` and `scale_from` candidates. |
-| `find_actionable_insights` | optional `session_id` | Priority actions combining budget, fatigue, low-confidence, and data-quality signals. |
+| `get_budget_reallocation_recommendations` | optional `session_id`, `limit` | Structured `scale_to` and `scale_from` diagnostic candidates. Treat as human-review input, not autonomous budget movement. |
+| `find_actionable_insights` | optional `session_id` | Priority actions combining budget, fatigue, low-confidence, and data-quality signals. Treat as diagnostic guidance. |
+
+## Agent Usage Boundary
+
+Typical end-user prompts for an agent using Scout:
+
+```text
+Upload this YouTube campaign report and tell me which creatives are performing best and worst.
+Rank the creatives by creative quality and explain the main drivers.
+Which results are directional because of small cohorts or missing reach/frequency?
+Compare these creatives and explain which one is stronger for this campaign objective.
+Summarize the key creative learnings from this mid-funnel campaign.
+```
+
+Agent behavior expected in V0.1:
+
+- Upload files through the MCP upload workflow, not by passing client-local paths to a remote service.
+- Preview mappings before ingesting.
+- Use `creative_quality_score` as the default headline ranking unless the user explicitly asks for another metric.
+- Explain `score_caveats`, `directional_only`, and cohort context.
+- Avoid presenting Scout output as causal proof.
+- Avoid autonomous planning, pausing, scaling, or budget reallocation decisions.
 
 ### Example MCP Flow
 
@@ -456,30 +553,51 @@ If the user corrects columns:
 ### Processing Pipeline
 
 1. Load standard Pixel sheets or mapped CSV/Excel data.
-2. Normalize platform, objective, format, placement, OS, asset type, and campaign labels.
-3. Compute raw row metrics: completion rate, CTR, engagement rate, canonical attention inputs.
-4. Aggregate raw ad lines to creative rows by `creative_name + platform + objective + buying_type + format_canonical`.
-5. Recompute aggregate metrics: CTR, engagement rate, share rate, completion rate, cost per complete view, reach per spend, and CPM.
-6. Add duration-adjusted completion and audience-consistency adjustment.
-7. Mark low-confidence rows using spend/reach thresholds.
-8. Score within cohort using objective-specific metrics.
-9. Apply frequency penalty, audience-consistency adjustment, and low-confidence cap.
-10. Assign tier, action, explanation, and expose insights through MCP tools.
+2. Normalize or derive platform, objective, format, placement, OS, asset type, and campaign labels.
+3. Preserve ad/video identifiers as metadata and extract OPID-style ad IDs where available.
+4. Compute raw row metrics: completion rate, CTR, engagement rate, TrueView fields, video quartile rates, and canonical attention inputs.
+5. Assign YouTube measurement family where relevant: `trueview_eligible`, `completion_only`, `mixed`, or `standard`.
+6. Aggregate raw ad lines to creative rows by `creative_name + platform + objective + buying_type + format_canonical`, plus `youtube_measurement_family` when present.
+7. Recompute aggregate metrics: CTR, engagement rate, share rate, completion rate, cost per complete view, reach per spend, and CPM.
+8. Add duration-adjusted completion and audience-consistency adjustment.
+9. Mark low-confidence rows using spend/reach thresholds, without treating missing reach as zero reach.
+10. Score within cohort using objective-specific metrics.
+11. Apply frequency penalty only when creative-level reach and frequency are both valid, then apply audience-consistency adjustment and low-confidence cap.
+12. Assign score contract fields, tier, action, explanation, and expose insights through MCP tools.
 
 ### Scoring Cohorts
 
 Scores are percentile-based within cohorts. A cohort is defined by:
 
 ```text
-objective + platform + buying_type + format_canonical
+objective + platform + buying_type + format_canonical + youtube_measurement_family when present
 ```
 
 This means:
 
 - Paid and Boosting are scored separately.
 - Static and video/motion formats are scored separately when relevant.
+- YouTube TrueView-eligible and completion-only rows are scored separately when measurement mechanics differ.
 - A Meta Awareness static row should not be directly compared to a TikTok Video Views row as if the score means the same absolute thing.
 - Use scores for ranking within the right context, then use spend, reach, frequency, and business judgment for final action.
+
+### Score Contract
+
+Scout exposes separate score fields so agents do not blur creative diagnosis with media efficiency:
+
+| Field | Meaning |
+|---|---|
+| `creative_quality_score` | Default `rank_creatives` metric. Built from primary, secondary, and available attention-proxy components. |
+| `media_efficiency_overlay_score` | Cost-efficiency component score. Useful context, but not the default creative ranking. |
+| `combined_scout_score` | Blended creative + media-efficiency score after eligible penalties/adjustments. |
+| `composite_score` | Legacy alias for `combined_scout_score`. Kept for backward compatibility. |
+| `methodology_version` | Current methodology identifier. |
+| `source_grain` | Whether the row is creative-level or ad-line-level. |
+| `scoring_group` | Cohort used for percentile ranking. |
+| `group_size` | Number of rows in the scoring cohort. |
+| `rank_in_group` | Rank within the scoring cohort. |
+| `directional_only` | True when cohort size is below the current warning threshold. |
+| `score_caveats` | Human-readable caveats such as small cohort or missing valid reach/frequency. |
 
 ### Weights
 
@@ -553,15 +671,17 @@ Static assets use static-specific metrics because VTR and completion are not mea
 Frequency is penalized after the weighted score is calculated:
 
 ```text
-if frequency <= 2.0:
+if reach <= 0 or frequency <= 0:
+  penalty = 1.0
+elif frequency <= 2.0:
   penalty = 1.0
 else:
   penalty = 1 / (1 + (frequency - 2.0) * 0.15)
 
-composite_score = composite_raw * penalty
+combined_scout_score = composite_raw * penalty
 ```
 
-This is intentionally gradual. It does not automatically kill high-frequency creatives, but it reduces scores where overexposure is likely.
+This is intentionally gradual. It does not automatically kill high-frequency creatives, but it reduces scores where overexposure is likely. The penalty is not applied when reach/frequency is missing at the creative grain; those rows receive a caveat instead.
 
 ### Audience Consistency
 
@@ -577,7 +697,7 @@ More consistent creatives keep more of their score. Volatile creatives are moder
 A creative row is low confidence if:
 
 ```text
-spend < min_spend OR reach < min_reach
+spend < min_spend OR (reach is present and reach < min_reach)
 ```
 
 Defaults:
@@ -587,7 +707,7 @@ min_spend = 500
 min_reach = 10000
 ```
 
-Low-confidence rows are capped at a score of 80 and are excluded from top/bottom performer lists unless a concept tool is explicitly asked to include them.
+Missing reach is not treated as zero reach. Low-confidence rows are capped at a score of 80 and are excluded from top/bottom performer lists unless a concept tool is explicitly asked to include them.
 
 ### Tiers
 
@@ -663,29 +783,44 @@ If Google ADC is not configured locally, preview_data_mapping still runs but use
 ## Data Quality And Operational Caveats
 
 - Scores are cohort-relative, not absolute truth.
+- Scout is diagnostic. It is not a causal effectiveness model and should not be presented as proving incremental lift.
 - Paid and Boosting scores should not be compared directly.
 - Static and video scores use different metric sets.
+- YouTube TrueView and completion-only measurement families should not be pooled into the same benchmark.
 - Low-confidence rows can be promising but should not drive large budget moves until validated.
+- Small scoring cohorts are marked directional and should be reviewed by a human analyst.
+- Missing creative-level reach/frequency means Scout will not apply a frequency penalty; it will add a caveat instead.
 - `Unknown` format or placement values should be monitored; too many unknowns usually means the source mapping needs improvement.
 - The MCP in-memory session state is fine for local/dev use. For production Cloud Run, use an external store if sessions need to survive restarts or scale across instances.
 - The current service does not perform media/asset visual analysis. It only analyzes structured performance metrics and mapped metadata.
-- The current service does not authenticate MCP requests. Add auth before exposing publicly.
+- The current Cloud Run service does not authenticate MCP requests. Add auth before exposing publicly or processing sensitive WPP/client data.
+- The current Cloud Run service is not WPP-hosted infrastructure. Treat it as a prototype deployment until migrated or approved.
 
 ## Handover Checklist
 
 Before handing WPP Scout to another engineer or deploying it:
 
-1. Run `python3 -m pytest api/tests tests -q`.
+1. Run `PYTHONPATH=. python3 -m pytest -q`.
 2. Run `python3 test_mcp_flow.py`.
 3. Confirm `README.md` matches the current MCP tool list.
 4. Configure `GOOGLE_CLOUD_PROJECT` and ADC/service-account access if AI mapping is required.
 5. Decide whether production sessions need Redis, Cloud Storage, Firestore, or another shared session store.
 6. Add auth at the MCP/API boundary before public exposure.
-7. Smoke test a native Pixel workbook and a non-standard mapped CSV.
+7. Confirm whether the service will move to WPP infrastructure and complete the required WPP security/data review before production use.
+8. Smoke test a native Pixel workbook, a non-standard mapped CSV, and the current YouTube Target Frequency export shape.
+9. Confirm analytics sign-off scope: goal, metric choice, comparison groups, weighting, caveat thresholds, and explanation language.
+10. Keep budget/planning/reallocation as human-reviewed diagnostic output unless explicitly approved as an agent action.
 
 ## Recent Verification
 
-On 2026-04-27, all 22 MCP tools were smoke-tested against the provided Pixel DE workbook:
+On 2026-05-20, the repo was verified before this README handover update:
+
+- Local `main` was aligned with `origin/main` before editing this README.
+- Full test suite passed: `72 passed`.
+- Scout YouTube scoring contract was committed and pushed as `5e85421 Harden YouTube Scout scoring contract`.
+- Cloud Run live state was checked: `wpp-scout-mcp-00020-9mb`, 100% traffic.
+
+Earlier verification on 2026-04-27 covered all 22 MCP tools against the provided Pixel DE workbook:
 
 - 22/22 tools listed and called.
 - 0 missing tools.
